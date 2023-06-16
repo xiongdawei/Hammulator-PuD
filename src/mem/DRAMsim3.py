@@ -54,3 +54,6 @@ class DRAMsim3(AbstractMemory):
     filePath = Param.String(
         "ext/dramsim3/DRAMsim3/", "Directory to prepend to file names"
     )
+
+    def controller(self):
+        return self
