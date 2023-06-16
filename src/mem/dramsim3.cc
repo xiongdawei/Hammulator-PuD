@@ -43,6 +43,9 @@
 #include "debug/Drain.hh"
 #include "sim/system.hh"
 
+#include <cstdint>
+#include <random>
+
 namespace gem5
 {
 
@@ -53,10 +56,15 @@ DRAMsim3::DRAMsim3(const Params &p) :
     AbstractMemory(p),
     port(name() + ".port", *this),
     read_cb(std::bind(&DRAMsim3::readComplete,
-                      this, 0, std::placeholders::_1)),
+                      this, 0, std::placeholders::_1,
+                      std::placeholders::_2)),
     write_cb(std::bind(&DRAMsim3::writeComplete,
-                       this, 0, std::placeholders::_1)),
-    wrapper(p.configFile, p.filePath, read_cb, write_cb),
+                       this, 0, std::placeholders::_1,
+                       std::placeholders::_2)),
+    refresh_cb(std::bind(&DRAMsim3::refreshComplete,
+                       this, 0, std::placeholders::_1,
+                       std::placeholders::_2, std::placeholders::_3)),
+    wrapper(p.configFile, p.filePath, read_cb, write_cb, refresh_cb),
     retryReq(false), retryResp(false), startTick(0),
     nbrOutstandingReads(0), nbrOutstandingWrites(0),
     sendResponseEvent([this]{ sendResponse(); }, name()),
@@ -65,6 +73,11 @@ DRAMsim3::DRAMsim3(const Params &p) :
     DPRINTF(DRAMsim3,
             "Instantiated DRAMsim3 with clock %d ns and queue size %d\n",
             wrapper.clockPeriod(), wrapper.queueSize());
+
+    // Get dram mapping
+    config = wrapper.GetConfig();
+
+    para_rng = std::minstd_rand(0);
 
     // Register a callback to compensate for the destructor not
     // being called. The callback prints the DRAMsim3 stats.
@@ -150,6 +163,13 @@ DRAMsim3::tick()
             retryReq = false;
             port.sendRetryReq();
         }
+    } else {
+        // erase both hammer and flipped state since we run in a non-timing
+        // CPU that does not execute the callbacks
+        // therefore we don't know if the memory was written in between and
+        // flips should therefore be possible again
+        hammer_count.clear();
+        flipped.clear();
     }
 
     schedule(tickEvent,
@@ -289,10 +309,59 @@ DRAMsim3::accessAndRespond(PacketPtr pkt)
     }
 }
 
-void DRAMsim3::readComplete(unsigned id, uint64_t addr)
-{
+inline double DRAMsim3::gen_proba(uint64_t addr) {
+    auto pp = probabilities.find(addr);
+    if (pp == probabilities.end()) {
+        std::ranlux48_base gen(addr);
+        probabilities[addr] = std::generate_canonical<double, 10>(gen);
+        return probabilities[addr];
+    } else {
+        return pp->second;
+    }
+}
 
+void DRAMsim3::PARA(int channel, int rank, int bankgroup, int bank, int row) {
+    for (int dist=-5; dist<=5; dist++) {
+        if (dist == 0 || row+dist < 0 || row+dist>=config->rows) {
+            continue;
+        }
+        double rand = std::generate_canonical<double, 10>(para_rng);
+        if (rand > config->para_proba) {
+            continue;
+        }
+        uint64_t target = config->ReverseAddressMapping(channel, rank, bankgroup, bank, row+dist, 0);
+        hammer_count.erase(target);
+    }
+}
+
+void DRAMsim3::TRR(int channel, int rank, int bankgroup, int bank, int row) {
+    for (int dist=-5; dist<=5; dist++) {
+        if (dist == 0 || row+dist < 0 || row+dist>=config->rows) {
+            continue;
+        }
+        uint64_t target = config->ReverseAddressMapping(channel, rank, bankgroup, bank, row+dist, 0);
+        if(trr_count.find(target) == trr_count.end()) {
+            trr_count[target] = 1;
+        } else {
+            trr_count[target]++;
+        }
+
+        if (trr_count[target] > config->trr_threshold) {
+            hammer_count.erase(target);
+        }
+    }
+}
+
+void DRAMsim3::readComplete(unsigned id, uint64_t addr, bool bufferhit)
+{
     DPRINTF(DRAMsim3, "Read to address %lld complete\n", addr);
+
+    auto a = config->AddressMapping(addr);
+    int channel = a.channel;
+    int rank = a.rank;
+    int bankgroup = a.bankgroup;
+    int bank = a.bank;
+    int row = a.row;
 
     // get the outstanding reads for the address in question
     auto p = outstandingReads.find(addr);
@@ -313,11 +382,119 @@ void DRAMsim3::readComplete(unsigned id, uint64_t addr)
 
     // perform the actual memory access
     accessAndRespond(pkt);
+
+    // Refresh the accessed row
+    uint64_t row_base = config->ReverseAddressMapping(channel, rank, bankgroup, bank, row, 0);
+    hammer_count.erase(row_base);
+
+    // no rowhammer effects when rowbuffer hit
+    if (bufferhit) {
+        return;
+    }
+
+    for (int dist=-5; dist<=5; dist++) {
+        if (dist == 0 || row+dist < 0 || row+dist>=config->rows) {
+            continue;
+        }
+        double add = 0;
+        switch (abs(dist)) {
+            case 5:
+                add = config->inc_dist_5;
+                break;
+            case 4:
+                add = config->inc_dist_4;
+                break;
+            case 3:
+                add = config->inc_dist_3;
+                break;
+            case 2:
+                add = config->inc_dist_2;
+                break;
+            case 1:
+                add = config->inc_dist_1;
+                break;
+        }
+
+        if (add == 0) {
+            // We don't increment for this distance
+            continue;
+        }
+
+        uint64_t flipped_row_base = config->ReverseAddressMapping(channel, rank, bankgroup, bank, row+dist, 0);
+        if(hammer_count.find(flipped_row_base) == hammer_count.end()) {
+            hammer_count.insert(std::make_pair(flipped_row_base, add));
+            // Don't check against threshold here since we should be way below
+            continue;
+        }
+
+        hammer_count[flipped_row_base] += add;
+        if (hammer_count[flipped_row_base] < config->hc_first) {
+            continue;
+        }
+
+        double row_flip_rate = config->hc_last_bitflip_rate
+                *std::min((hammer_count[flipped_row_base]-config->hc_first)/(config->hc_last-config->hc_first), 1.0);
+        for (uint64_t quad=flipped_row_base; quad<flipped_row_base+config->row_size; quad+=sizeof(uint64_t)) {
+            if (flipped.find(quad) != flipped.end()) {
+                // already flipped
+                continue;
+            }
+
+            // probabilisticly flip quadword
+            if (gen_proba(quad) > row_flip_rate) {
+                // no flip
+                continue;
+            }
+
+            flipped.insert(quad);
+
+            // this xor makes sure that this is not the same probability as for gen_proba
+            uint64_t mask = 0;
+            if (config->flip_mask) {
+                mask = config->flip_mask;
+            } else {
+                std::mt19937 gen(quad ^ 0xcafecafecafecafe);
+                double flipped_bits_ran = std::generate_canonical<double, 10>(gen);
+                int flipped_bits;
+                if (flipped_bits_ran <= config->proba_1_bit_flipped) {
+                    flipped_bits = 1;
+                } else if (flipped_bits_ran <= config->proba_1_bit_flipped
+                                              +config->proba_2_bit_flipped) {
+                    flipped_bits = 2;
+                } else if (flipped_bits_ran <= config->proba_1_bit_flipped
+                                              +config->proba_2_bit_flipped
+                                              +config->proba_3_bit_flipped) {
+                    flipped_bits = 3;
+                } else {
+                    flipped_bits = 4;
+                }
+
+                std::uniform_int_distribution<> distrib(0, 63);
+                for (int j = 0; j<flipped_bits; j++) {
+                    int pos;
+                    // find position that is not yet taken
+                    do {
+                        pos = distrib(gen);
+                    } while (mask & (((uint64_t)1) << pos));
+                    mask |= ((uint64_t)1) << pos;
+                }
+            }
+
+            // flip with mask
+            *(uint64_t*)this->toHostAddr(quad) ^= mask;
+        }
+    }
+
+    if (config->para_enabled) {
+        PARA(channel, rank, bankgroup, bank, row);
+    }
+    if (config->trr_enabled) {
+        TRR(channel, rank, bankgroup, bank, row);
+    }
 }
 
-void DRAMsim3::writeComplete(unsigned id, uint64_t addr)
+void DRAMsim3::writeComplete(unsigned id, uint64_t addr, bool bufferhit)
 {
-
     DPRINTF(DRAMsim3, "Write to address %lld complete\n", addr);
 
     // get the outstanding reads for the address in question
@@ -335,6 +512,31 @@ void DRAMsim3::writeComplete(unsigned id, uint64_t addr)
 
     if (nbrOutstanding() == 0)
         signalDrainDone();
+
+    // Refresh the written row
+    auto a = config->AddressMapping(addr);
+    uint64_t row_base = config->ReverseAddressMapping(a.channel, a.rank, a.bankgroup, a.bank, a.row, 0);
+    hammer_count.erase(row_base);
+    // Also make it flippable again
+    for (uint64_t quad=row_base; quad<row_base+config->row_size; quad+=sizeof(uint64_t)) {
+        flipped.erase(quad);
+    }
+}
+
+void DRAMsim3::refreshComplete(unsigned id, int channel, int bankgroup, int bank)
+{
+    for(auto it= hammer_count.begin(); it != hammer_count.end();){
+        dramsim3::Address a = config->AddressMapping(it->first);
+        if((a.channel == channel) &&
+           ((a.bankgroup == bankgroup) || (bankgroup == -1)) &&
+           ((a.bank == bank) || (bank == -1))){
+                // NOTE: flipped is not erased here since we dont want to flip mutliple times
+                it = hammer_count.erase(it);
+        } else {
+            it++;
+        }
+    }
+    DPRINTF(DRAMsim3, "Refresh at channel %d bankgroup %d bank %d complete\n", channel, bankgroup, bank);
 }
 
 Port&

@@ -63,10 +63,11 @@ namespace memory
 
 DRAMsim3Wrapper::DRAMsim3Wrapper(const std::string& config_file,
                                  const std::string& working_dir,
-                                 std::function<void(uint64_t)> read_cb,
-                                 std::function<void(uint64_t)> write_cb) :
+                                 std::function<void(uint64_t, bool)> read_cb,
+                                 std::function<void(uint64_t, bool)> write_cb,
+                                 std::function<void(int, int, int)> refresh_cb) :
     dramsim(dramsim3::GetMemorySystem(config_file, working_dir,
-                                       read_cb, write_cb)),
+                                       read_cb, write_cb,refresh_cb)),
     _clockPeriod(0.0), _queueSize(0), _burstSize(0)
 {
     // there is no way of getting DRAMsim3 to tell us what frequency
@@ -100,6 +101,11 @@ DRAMsim3Wrapper::~DRAMsim3Wrapper()
     delete dramsim;
 }
 
+dramsim3::Config* DRAMsim3Wrapper::GetConfig()
+{
+    return dramsim->GetConfig();
+}
+
 
 void
 DRAMsim3Wrapper::printStats()
@@ -114,10 +120,11 @@ DRAMsim3Wrapper::resetStats()
 }
 
 void
-DRAMsim3Wrapper::setCallbacks(std::function<void(uint64_t)> read_complete,
-                              std::function<void(uint64_t)> write_complete)
+DRAMsim3Wrapper::setCallbacks(std::function<void(uint64_t, bool)> read_complete,
+                              std::function<void(uint64_t, bool)> write_complete,
+                              std::function<void(int, int, int)> refresh_complete)
 {
-    dramsim->RegisterCallbacks(read_complete, write_complete);
+    dramsim->RegisterCallbacks(read_complete, write_complete, refresh_complete);
 }
 
 bool

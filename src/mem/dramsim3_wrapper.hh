@@ -46,6 +46,8 @@
 
 #include <functional>
 #include <string>
+#include "params/DRAMsim3.hh"
+#include "configuration.h"
 
 /**
  * Forward declaration to avoid includes
@@ -98,9 +100,12 @@ class DRAMsim3Wrapper
      */
     DRAMsim3Wrapper(const std::string& config_file,
                     const std::string& working_dir,
-                    std::function<void(uint64_t)> read_cb,
-                    std::function<void(uint64_t)> write_cb);
+                    std::function<void(uint64_t, bool)> read_cb,
+                    std::function<void(uint64_t, bool)> write_cb,
+                    std::function<void(int, int, int)> refresh_cb);
     ~DRAMsim3Wrapper();
+
+    dramsim3::Config* GetConfig();
 
     /**
      * Print the stats gathered in DRAMsim3.
@@ -117,9 +122,11 @@ class DRAMsim3Wrapper
      *
      * @param read_callback Callback used for read completions
      * @param write_callback Callback used for write completions
+     * @param refresh_callback Callback used for refresh completions
      */
-    void setCallbacks(std::function<void(uint64_t)> read_complete,
-                      std::function<void(uint64_t)> write_complete);
+    void setCallbacks(std::function<void(uint64_t, bool)> read_complete,
+                      std::function<void(uint64_t, bool)> write_complete,
+                      std::function<void(int, int, int)> refresh_complete);
 
     /**
      * Determine if the controller can accept a new packet or not.

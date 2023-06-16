@@ -45,12 +45,13 @@
 
 #include <functional>
 #include <queue>
+#include <random>
 #include <unordered_map>
+#include <tuple>
 
 #include "mem/abstract_mem.hh"
 #include "mem/dramsim3_wrapper.hh"
 #include "mem/qport.hh"
-#include "params/DRAMsim3.hh"
 
 namespace gem5
 {
@@ -94,11 +95,19 @@ class DRAMsim3 : public AbstractMemory
 
     MemoryPort port;
 
+    std::unordered_map<uint64_t,double> hammer_count;
+    std::unordered_map<uint64_t,double> probabilities;
+    std::set<uint64_t> flipped;
+    std::minstd_rand para_rng;
+
+    dramsim3::Config* config;
+
     /**
      * Callback functions
      */
-    std::function<void(uint64_t)> read_cb;
-    std::function<void(uint64_t)> write_cb;
+    std::function<void(uint64_t, bool)> read_cb;
+    std::function<void(uint64_t, bool)> write_cb;
+    std::function<void(int, int, int)> refresh_cb;
 
     /**
      * The actual DRAMsim3 wrapper
@@ -189,18 +198,31 @@ class DRAMsim3 : public AbstractMemory
      *
      * @param id Channel id of the responder
      * @param addr Address of the request
-     * @param cycle Internal cycle count of DRAMsim3
+     * @param bufferhit If the read was served through the row buffer
      */
-    void readComplete(unsigned id, uint64_t addr);
+    void readComplete(unsigned id, uint64_t addr, bool bufferhit);
 
     /**
      * Write completion callback.
      *
      * @param id Channel id of the responder
      * @param addr Address of the request
-     * @param cycle Internal cycle count of DRAMsim3
+     * @param bufferhit If the write was served through the row buffer
      */
-    void writeComplete(unsigned id, uint64_t addr);
+    void writeComplete(unsigned id, uint64_t addr, bool bufferhit);
+
+     /**
+     * Refresh completion callback.
+     */
+    void refreshComplete(unsigned id, int channel, int bankgroup, int bank);
+
+
+    void PARA(int channel, int rank, int bankgroup, int bank, int row);
+
+    std::unordered_map<uint64_t,int> trr_count;
+    void TRR(int channel, int rank, int bankgroup, int bank, int row);
+
+    double gen_proba(uint64_t addr);
 
     DrainState drain() override;
 
