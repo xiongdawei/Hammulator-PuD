@@ -32,3 +32,9 @@ configs/example/memcheck.cfg
 configs/dram/lowp_sweep.cfg
 .pyenv
 .vscode
+
+rowhammer_test
+dramsim3.txt
+dramsim3.json
+dramsim3epoch.json
+compile_commands.json
