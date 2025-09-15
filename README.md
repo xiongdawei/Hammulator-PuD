@@ -6,7 +6,7 @@ This repository contains the source code for the [Hammulator framework](https://
 
 ``` sh
 # first clone this repo
-git clone https://cispa/hammulator
+git clone https://github.com/cispa/hammulator
 # then clone gem5 into the subdirectory gem5
 git clone -b v22.1.0.0 https://github.com/gem5/gem5 gem5
 # and finish with cloning DRAMsim3 into gem5/ext/dramsim3/DRAMsim3
@@ -186,15 +186,15 @@ To monitor what is going on during the checkpoint creation launch above command 
 
 Restoring a checkpoint is as easy as:
 
-``` sh
-make fs-create-checkpoint
+```sh
+make fs-restore
 ```
 
 Note that this command only starts gem5 and does not attach to stdout/stdin.
 For that either run `m5term localhost 3456`[^3] after starting the simulator or run above command with tmux wrapper:
 
-``` sh
-./tmux.sh make fs-create-checkpoint
+```sh
+./tmux.sh make fs-restore
 ```
 
 In either case you should find yourself in a Gnu/Linux shell now.
