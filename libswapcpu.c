@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <cassert>
 
 #include <gem5/m5ops.h>
 #include <m5_mmap.h>
@@ -64,7 +65,8 @@ void libswapcpu_swapcpu() {
     } else {
         if (using_initial_cpu) {
             // Using KVM CPU.
-            system("m5 exit");
+            int r = system("m5 exit");
+            assert(r == 0);
         } else {
             // Using slower CPU.
             // TODO: why is this unreliable? Why cant we use it with KVM too?
