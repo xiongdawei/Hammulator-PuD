@@ -37,6 +37,8 @@ extern "C" {
 
 #include <gem5/asm/generic/m5ops.h>
 
+uint64_t m5_virttophys(uint64_t vaddr);
+
 void m5_arm(uint64_t address);
 void m5_quiesce(void);
 void m5_quiesce_ns(uint64_t ns);

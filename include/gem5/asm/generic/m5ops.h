@@ -67,7 +67,7 @@
 #define M5OP_ADD_SYMBOL         0x53
 #define M5OP_PANIC              0x54
 
-#define M5OP_RESERVED1          0x55 // Reserved for user, used to be annotate
+#define M5OP_VIRTTOPHYS         0x55
 #define M5OP_RESERVED2          0x56 // Reserved for user
 #define M5OP_RESERVED3          0x57 // Reserved for user
 #define M5OP_RESERVED4          0x58 // Reserved for user
@@ -82,6 +82,7 @@
 
 
 #define M5OP_FOREACH                                            \
+    M5OP(m5_virttophys, M5OP_VIRTTOPHYS)                        \
     M5OP(m5_arm, M5OP_ARM)                                      \
     M5OP(m5_quiesce, M5OP_QUIESCE)                              \
     M5OP(m5_quiesce_ns, M5OP_QUIESCE_NS)                        \

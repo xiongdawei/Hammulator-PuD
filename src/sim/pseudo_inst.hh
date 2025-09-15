@@ -65,6 +65,7 @@ decodeAddrOffset(Addr offset, uint8_t &func)
     func = bits(offset, 15, 8);
 }
 
+uint64_t virttophys(ThreadContext *tc, Addr vaddr);
 void arm(ThreadContext *tc);
 void quiesce(ThreadContext *tc);
 void quiesceSkip(ThreadContext *tc);
@@ -214,7 +215,9 @@ pseudoInstWork(ThreadContext *tc, uint8_t func, uint64_t &result)
         invokeSimcall<ABI>(tc, workend);
         return true;
 
-      case M5OP_RESERVED1:
+      case M5OP_VIRTTOPHYS:
+        result = invokeSimcall<ABI>(tc, virttophys);
+        return true;
       case M5OP_RESERVED2:
       case M5OP_RESERVED3:
       case M5OP_RESERVED4:

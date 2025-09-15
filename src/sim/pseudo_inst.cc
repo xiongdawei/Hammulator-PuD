@@ -104,6 +104,18 @@ const std::string DIST_SIZE = "dist-size";
 
 } // anonymous namespace
 
+uint64_t
+virttophys(ThreadContext *tc, Addr vaddr)
+{
+    DPRINTF(PseudoInst, "pseudo_inst::virttophys()\n");
+
+    uint64_t paddr;
+    if (!tc->getProcessPtr()->pTable->translate(vaddr, paddr)) {
+        return 0;
+    }
+    return paddr;
+}
+
 void
 arm(ThreadContext *tc)
 {
