@@ -4,14 +4,14 @@ Date: Fri, 16 Jun 2023 11:15:12 +0200
 Subject: [PATCH 6/6] hammulator
 
 ---
- src/mem/dramsim3.cc         | 212 ++++++++++++++++++++++++++++++++++--
+ src/mem/dramsim3.cc         | 216 ++++++++++++++++++++++++++++++++++--
  src/mem/dramsim3.hh         |  36 ++++--
  src/mem/dramsim3_wrapper.cc |  19 +++-
  src/mem/dramsim3_wrapper.hh |  15 ++-
- 4 files changed, 258 insertions(+), 24 deletions(-)
+ 4 files changed, 262 insertions(+), 24 deletions(-)
 
 diff --git a/src/mem/dramsim3.cc b/src/mem/dramsim3.cc
-index fbffc7b579..9c80918490 100644
+index fbffc7b579..987bc21d59 100644
 --- a/src/mem/dramsim3.cc
 +++ b/src/mem/dramsim3.cc
 @@ -43,6 +43,9 @@
@@ -132,13 +132,14 @@ index fbffc7b579..9c80918490 100644
      // get the outstanding reads for the address in question
      auto p = outstandingReads.find(addr);
      assert(p != outstandingReads.end());
-@@ -313,11 +382,118 @@ void DRAMsim3::readComplete(unsigned id, uint64_t addr)
+@@ -313,11 +382,119 @@ void DRAMsim3::readComplete(unsigned id, uint64_t addr)
  
      // perform the actual memory access
      accessAndRespond(pkt);
 +
-+    // Memory corruption code
-+    hammer_count.erase(addr);
++    // Refresh the accessed row
++    uint64_t row_base = config->ReverseAddressMapping(channel, rank, bankgroup, bank, row, 0);
++    hammer_count.erase(row_base);
 +
 +    // no rowhammer effects when rowbuffer hit
 +    if (bufferhit) {
@@ -253,14 +254,17 @@ index fbffc7b579..9c80918490 100644
      DPRINTF(DRAMsim3, "Write to address %lld complete\n", addr);
  
      // get the outstanding reads for the address in question
-@@ -335,6 +511,28 @@ void DRAMsim3::writeComplete(unsigned id, uint64_t addr)
+@@ -335,6 +512,31 @@ void DRAMsim3::writeComplete(unsigned id, uint64_t addr)
  
      if (nbrOutstanding() == 0)
          signalDrainDone();
 +
-+    // Memory corruption code
-+    hammer_count.erase(addr);
-+    for (uint64_t quad=addr; quad<addr+config->row_size; quad+=sizeof(uint64_t)) {
++    // Refresh the written row
++    auto a = config->AddressMapping(addr);
++    uint64_t row_base = config->ReverseAddressMapping(a.channel, a.rank, a.bankgroup, a.bank, a.row, 0);
++    hammer_count.erase(row_base);
++    // Also make it flippable again
++    for (uint64_t quad=row_base; quad<row_base+config->row_size; quad+=sizeof(uint64_t)) {
 +        flipped.erase(quad);
 +    }
 +}
