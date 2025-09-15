@@ -153,7 +153,7 @@ index fbffc7b579..46acbfcd78 100644
 +        if (dist == 0 || row+dist < 0 || row+dist>=config->rows) {
 +            continue;
 +        }
-+        int add = 0;
++        double add = 0;
 +        switch (abs(dist)) {
 +            case 5:
 +                add = config->inc_dist_5;
