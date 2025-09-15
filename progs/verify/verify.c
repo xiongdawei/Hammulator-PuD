@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include "libswapcpu.h"
+#include "libhammer.h"
 
 static inline uint64_t rdtsc() {
   uint64_t a = 0, d = 0;
@@ -50,22 +51,26 @@ uint64_t frame_number_from_pagemap(uint64_t value) {
 }
 
 uint64_t get_physical_addr(uintptr_t virtual_addr) {
-  int fd = open("/proc/self/pagemap", O_RDONLY);
-  assert(fd >= 0);
+  if (!syscall_emulation) {
+    int fd = open("/proc/self/pagemap", O_RDONLY);
+    assert(fd >= 0);
 
-  off_t pos = lseek(fd, (virtual_addr / page_size) * 8, SEEK_SET);
-  assert(pos >= 0);
-  uint64_t value;
-  int got = read(fd, &value, 8);
-  assert(got == 8);
-  int rc = close(fd);
-  assert(rc == 0);
+    off_t pos = lseek(fd, (virtual_addr / page_size) * 8, SEEK_SET);
+    assert(pos >= 0);
+    uint64_t value;
+    int got = read(fd, &value, 8);
+    assert(got == 8);
+    int rc = close(fd);
+    assert(rc == 0);
 
-  // Check the "page present" flag.
-  assert(value & (1ULL << 63));
+    // Check the "page present" flag.
+    assert(value & (1ULL << 63));
 
-  uint64_t frame_num = frame_number_from_pagemap(value);
-  return (frame_num * page_size) | (virtual_addr & (page_size - 1));
+    uint64_t frame_num = frame_number_from_pagemap(value);
+    return (frame_num * page_size) | (virtual_addr & (page_size - 1));
+  } else {
+    return virt_to_phys(virtual_addr);
+  }
 }
 
 // changing this destroys mmap below
@@ -87,14 +92,12 @@ uint8_t* c;
 void scan(uint8_t* base) {
     uint64_t* b = (uint64_t*) base;
     int flips[5] = {0};
-    for (int i=0; i< rowsize / sizeof(uint64_t); i++) {
+    for (unsigned i=0; i < rowsize / sizeof(uint64_t); i++) {
         /* printf("%d 0x%p\n", i, base+i); */
         if (b[i] != co) {
             /* printf("ccount %d b[i] ^ co: 0x%lx\n", popcount(b[i] ^ co), b[i]); */
             printf("0x%016lx: %d flips, mask: 0x%016lx", (uint64_t)b+i*sizeof(uint64_t), popcount(b[i] ^ co), b[i]^co);
-            if (!syscall_emulation) {
-                printf(", physical: 0x%016lx", get_physical_addr((intptr_t)b+i));
-            }
+            printf(", physical: 0x%016lx", get_physical_addr((intptr_t)b+i));
             printf("\n");
             flips[popcount(b[i] ^ co)]++;
             /* printf("bit flip on 0x%p, index %d, value 0x%hhx\n", base+i, i, base[i]); */
@@ -111,9 +114,7 @@ void assert_no_flips(uint8_t* b) {
 
 void print_address(uint8_t* a) {
     printf("0x%016lx", (uint64_t)a);
-    if (!syscall_emulation) {
-        printf(", physical: 0x%016lx", get_physical_addr((intptr_t)a));
-    }
+    printf(", physical: 0x%016lx", get_physical_addr((intptr_t)a));
     printf("\n");
 }
 
@@ -170,7 +171,7 @@ int main()
     libswapcpu_swapcpu();
     printf("now hammering\n");
 
-    for (size_t i = 0; i < 6000; i++)
+    for (size_t i = 0; i < 15000; i++)
     /* while (1) */
     {
         flushaccess(lower);

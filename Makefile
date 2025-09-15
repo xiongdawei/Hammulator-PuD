@@ -29,7 +29,7 @@ TARGET_ISA=x86
 GEM5_HOME=$(realpath ./gem5)
 $(info GEM5_HOME is $(GEM5_HOME))
 CFLAGS += -static -Wall -O2 -I.
-LDFLAGS += -Lbuild -lswapcpu -L$(GEM5_HOME)/util/m5/build/$(TARGET_ISA)/out -lm5
+LDFLAGS += -Lbuild -lswapcpu -lhammer -L$(GEM5_HOME)/util/m5/build/$(TARGET_ISA)/out -lm5
 CC=gcc
 CXX=g++
 
@@ -54,6 +54,12 @@ build/libswapcpu.o: libswapcpu.c m5
 build/libswapcpu.a: build/libswapcpu.o
 	ar rcs build/libswapcpu.a build/libswapcpu.o
 
+build/libhammer.o: libhammer.c m5
+	$(CXX) -c -fPIC libhammer.c -o build/libhammer.o -I$(GEM5_HOME)/include -I$(GEM5_HOME)/util/m5/src $(CFLAGS)
+
+build/libhammer.a: build/libhammer.o
+	ar rcs build/libhammer.a build/libhammer.o
+
 dramsim3:
 	cmake -S gem5/ext/dramsim3/DRAMsim3 -B gem5/ext/dramsim3/DRAMsim3/build
 	make -C gem5/ext/dramsim3/DRAMsim3/build -j$(shell nproc)
@@ -69,12 +75,12 @@ fix_perf:
 ################################################################################
 
 # A simple binary that tests for Rowhammer bit flips.
-build/tmp_root/verify: progs/verify/verify.c build/libswapcpu.a
+build/tmp_root/verify: progs/verify/verify.c build/libswapcpu.a build/libhammer.a
 	mkdir -p build/tmp_root
 	$(CXX) -o build/tmp_root/verify progs/verify/verify.c $(CFLAGS) $(LDFLAGS)
 
 # The privelege escalation binary for the page table exploit by Google Project Zero.
-build/tmp_root/priv: progs/privesc/privesc.cc build/libswapcpu.a
+build/tmp_root/priv: progs/privesc/privesc.cc build/libswapcpu.a build/libhammer.a
 	mkdir -p build/tmp_root
 	$(CXX) -o build/tmp_root/priv progs/privesc/privesc.cc $(CFLAGS) $(LDFLAGS)
 
