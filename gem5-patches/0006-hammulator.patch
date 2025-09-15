@@ -1,17 +1,17 @@
-From 439a3f0871f669b53e6ed1a922998482c1200e44 Mon Sep 17 00:00:00 2001
+From bcf9c2d91f5535145678a961bf94a946acb94c12 Mon Sep 17 00:00:00 2001
 From: Fabian Thomas <fabian@fabianthomas.de>
 Date: Fri, 16 Jun 2023 11:15:12 +0200
 Subject: [PATCH 6/6] hammulator
 
 ---
- src/mem/dramsim3.cc         | 222 ++++++++++++++++++++++++++++++++++--
+ src/mem/dramsim3.cc         | 212 ++++++++++++++++++++++++++++++++++--
  src/mem/dramsim3.hh         |  36 ++++--
- src/mem/dramsim3_wrapper.cc |  19 ++-
+ src/mem/dramsim3_wrapper.cc |  19 +++-
  src/mem/dramsim3_wrapper.hh |  15 ++-
- 4 files changed, 268 insertions(+), 24 deletions(-)
+ 4 files changed, 258 insertions(+), 24 deletions(-)
 
 diff --git a/src/mem/dramsim3.cc b/src/mem/dramsim3.cc
-index fbffc7b579..46acbfcd78 100644
+index fbffc7b579..9c80918490 100644
 --- a/src/mem/dramsim3.cc
 +++ b/src/mem/dramsim3.cc
 @@ -43,6 +43,9 @@
@@ -69,7 +69,7 @@ index fbffc7b579..46acbfcd78 100644
      }
  
      schedule(tickEvent,
-@@ -289,10 +309,60 @@ DRAMsim3::accessAndRespond(PacketPtr pkt)
+@@ -289,11 +309,60 @@ DRAMsim3::accessAndRespond(PacketPtr pkt)
      }
  }
  
@@ -117,7 +117,7 @@ index fbffc7b579..46acbfcd78 100644
 +        }
 +    }
 +}
-+
+ 
 +void DRAMsim3::readComplete(unsigned id, uint64_t addr, bool bufferhit)
 +{
      DPRINTF(DRAMsim3, "Read to address %lld complete\n", addr);
@@ -132,7 +132,7 @@ index fbffc7b579..46acbfcd78 100644
      // get the outstanding reads for the address in question
      auto p = outstandingReads.find(addr);
      assert(p != outstandingReads.end());
-@@ -313,11 +386,119 @@ void DRAMsim3::readComplete(unsigned id, uint64_t addr)
+@@ -313,11 +382,118 @@ void DRAMsim3::readComplete(unsigned id, uint64_t addr)
  
      // perform the actual memory access
      accessAndRespond(pkt);
@@ -186,8 +186,7 @@ index fbffc7b579..46acbfcd78 100644
 +        }
 +
 +        double row_flip_rate = config->hc_last_bitflip_rate
-+                *std::min((hammer_count[flipped_row_base]-config->hc_first)/(config->hc_last-config->hc_first), 1.0)
-+                *64; // * bits in quadword, since we decide for one quadword here
++                *std::min((hammer_count[flipped_row_base]-config->hc_first)/(config->hc_last-config->hc_first), 1.0);
 +        for (uint64_t quad=flipped_row_base; quad<flipped_row_base+config->row_size; quad+=sizeof(uint64_t)) {
 +            if (flipped.find(quad) != flipped.end()) {
 +                // already flipped
@@ -254,7 +253,7 @@ index fbffc7b579..46acbfcd78 100644
      DPRINTF(DRAMsim3, "Write to address %lld complete\n", addr);
  
      // get the outstanding reads for the address in question
-@@ -335,6 +518,28 @@ void DRAMsim3::writeComplete(unsigned id, uint64_t addr)
+@@ -335,6 +511,28 @@ void DRAMsim3::writeComplete(unsigned id, uint64_t addr)
  
      if (nbrOutstanding() == 0)
          signalDrainDone();
@@ -450,5 +449,5 @@ index 41b1088e79..8f212cd287 100644
      /**
       * Determine if the controller can accept a new packet or not.
 -- 
-2.41.0
+2.50.1
 
