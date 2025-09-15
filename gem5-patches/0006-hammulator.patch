@@ -69,14 +69,12 @@ index fbffc7b579..46acbfcd78 100644
      }
  
      schedule(tickEvent,
-@@ -289,11 +309,62 @@ DRAMsim3::accessAndRespond(PacketPtr pkt)
+@@ -289,10 +309,60 @@ DRAMsim3::accessAndRespond(PacketPtr pkt)
      }
  }
  
 -void DRAMsim3::readComplete(unsigned id, uint64_t addr)
 -{
-+unsigned long long counts[10] = {0};
- 
 +inline double DRAMsim3::gen_proba(uint64_t addr) {
 +    auto pp = probabilities.find(addr);
 +    if (pp == probabilities.end()) {
@@ -134,12 +132,10 @@ index fbffc7b579..46acbfcd78 100644
      // get the outstanding reads for the address in question
      auto p = outstandingReads.find(addr);
      assert(p != outstandingReads.end());
-@@ -313,11 +386,121 @@ void DRAMsim3::readComplete(unsigned id, uint64_t addr)
+@@ -313,11 +386,119 @@ void DRAMsim3::readComplete(unsigned id, uint64_t addr)
  
      // perform the actual memory access
      accessAndRespond(pkt);
-+
-+    counts[channel]++;
 +
 +    // Memory corruption code
 +    hammer_count.erase(addr);
@@ -258,7 +254,7 @@ index fbffc7b579..46acbfcd78 100644
      DPRINTF(DRAMsim3, "Write to address %lld complete\n", addr);
  
      // get the outstanding reads for the address in question
-@@ -335,6 +518,31 @@ void DRAMsim3::writeComplete(unsigned id, uint64_t addr)
+@@ -335,6 +518,28 @@ void DRAMsim3::writeComplete(unsigned id, uint64_t addr)
  
      if (nbrOutstanding() == 0)
          signalDrainDone();
@@ -272,13 +268,11 @@ index fbffc7b579..46acbfcd78 100644
 +
 +void DRAMsim3::refreshComplete(unsigned id, int channel, int bankgroup, int bank)
 +{
-+    int maxcount = 0;;
 +    for(auto it= hammer_count.begin(); it != hammer_count.end();){
 +        dramsim3::Address a = config->AddressMapping(it->first);
 +        if((a.channel == channel) &&
 +           ((a.bankgroup == bankgroup) || (bankgroup == -1)) &&
 +           ((a.bank == bank) || (bank == -1))){
-+                maxcount = it->second > maxcount ? it->second : maxcount;
 +                // NOTE: flipped is not erased here since we dont want to flip mutliple times
 +                it = hammer_count.erase(it);
 +        } else {
@@ -286,7 +280,6 @@ index fbffc7b579..46acbfcd78 100644
 +        }
 +    }
 +    DPRINTF(DRAMsim3, "Refresh at channel %d bankgroup %d bank %d complete\n", channel, bankgroup, bank);
-+    counts[channel] = 0;
  }
  
  Port&
