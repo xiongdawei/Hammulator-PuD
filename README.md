@@ -8,9 +8,9 @@ This repository contains the source code for the [Hammulator framework](https://
 # first clone this repo
 git clone https://cispa/hammulator
 # then clone gem5 into the subdirectory gem5
-git clone https://github.com/gem5/gem5 gem5
+git clone -b v22.1.0.0 https://github.com/gem5/gem5 gem5
 # and finish with cloning DRAMsim3 into gem5/ext/dramsim3/DRAMsim3
-git clone https://github.com/umd-memsys/DRAMSim3 gem5/ext/dramsim3/DRAMsim3
+git clone -b 1.0.0 https://github.com/umd-memsys/DRAMSim3 gem5/ext/dramsim3/DRAMsim3
 ```
 
 ## Patching
@@ -42,6 +42,31 @@ Plus the following for building DRAMsim3:
 ``` sh
 sudo apt install cmake libinih-dev
 ```
+
+### Docker-based Environment
+
+For ease of use, we provide a Docker-based compilation environment in `Dockerfile`.
+Either build it locally:
+``` sh
+docker build -t hammulator-interactive --target=hammulator-interactive .
+```
+
+Or pull it:
+``` sh
+docker pull fabianthomas/hammulator-interactive:latest
+```
+
+Create a container:
+```sh
+docker run -dit -v .:/root/hammulator --name hammulator-interactive <hammulator-interactive or fabianthomas/hammulator-interactive:latest>
+```
+
+And attach:
+```sh
+docker exec -w /root/hammulator -it hammulator-interactive zsh
+```
+
+You can now proceed building in the container.
 
 ### Dependencies for full-system emulation
 

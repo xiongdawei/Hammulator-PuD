@@ -1,0 +1,13 @@
+FROM hammulator-interactive AS hammulator-compiled
+
+# NOTE: .dockerignore is used for cleaning up
+COPY . /root/hammulator
+
+WORKDIR /root/hammulator
+
+RUN git clone -b v22.1.0.0 https://github.com/gem5/gem5.git gem5
+RUN git clone -b 1.0.0 https://github.com/umd-memsys/DRAMSim3.git gem5/ext/dramsim3/DRAMsim3
+
+RUN ./apply.sh
+
+RUN make hammulator-mold
