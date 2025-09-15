@@ -79,6 +79,10 @@ build/tmp_root/verify: progs/verify/verify.c build/libswapcpu.a build/libhammer.
 	mkdir -p build/tmp_root
 	$(CXX) -o build/tmp_root/verify progs/verify/verify.c $(CFLAGS) $(LDFLAGS)
 
+build/tmp_root/example: progs/example/example.c build/libswapcpu.a build/libhammer.a
+	mkdir -p build/tmp_root
+	$(CXX) -o build/tmp_root/example progs/example/example.c $(CFLAGS) $(LDFLAGS)
+
 # The privelege escalation binary for the page table exploit by Google Project Zero.
 build/tmp_root/priv: progs/privesc/privesc.cc build/libswapcpu.a build/libhammer.a
 	mkdir -p build/tmp_root
@@ -98,7 +102,7 @@ build/tmp_root/rsa-public: progs/tiny-bignum-c/tests/rsa-public.c
 	mkdir -p build/tmp_root
 	$(CC) -o build/tmp_root/rsa-public progs/tiny-bignum-c/tests/rsa-public.c progs/tiny-bignum-c/bn.c -Iprogs/tiny-bignum-c $(CFLAGS) $(LDFLAGS)
 
-comp: build/tmp_root/verify build/tmp_root/priv build/tmp_root/target_prog
+comp: build/tmp_root/verify build/tmp_root/example build/tmp_root/priv build/tmp_root/target_prog
 
 build/tmp.img: comp
 	mkdir -p build/tmp_root
@@ -119,6 +123,9 @@ fs-restore: build/tmp.img
 
 verify: build/tmp_root/verify
 	build/X86/gem5.opt $(gem5_args) gem5/configs/example/se.py $(se-args) --cmd=build/tmp_root/verify
+
+example: build/tmp_root/example
+	build/X86/gem5.opt $(gem5_args) gem5/configs/example/se.py $(se-args) --cmd=build/tmp_root/example
 
 rsa: build/tmp_root/rsa
 	build/X86/gem5.opt $(gem5_args) gem5/configs/example/se.py $(se-args) --cmd=build/tmp_root/rsa

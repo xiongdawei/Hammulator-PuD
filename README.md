@@ -102,7 +102,27 @@ Syscall emulation can directly be used through the `se.sh` script:
 ```
 
 For everything more than quick experimenting we recommend extending the Makefile by a new target for your binary.
-The verify target(s) should serve as an example.
+
+We provide the example target (`progs/example/example.c`) to quickly showcase `libswapcpu`, `libhammer`, and basic bit flips.
+Run as:
+``` sh
+make example
+```
+
+Expected output:
+```
+000 paddr=e0000
+001 paddr=e8000
+Found bit flips at 0x7ffff7202568 with pattern: 0000000040000000
+002 paddr=f0000
+003 paddr=f8000
+004 paddr=100000
+Found bit flips at 0x7ffff721a4e8 with pattern: 0000000040000000
+005 paddr=108000
+006 paddr=110000
+007 paddr=118000
+008 paddr=120000
+```
 
 ## Full-system emulation
 
