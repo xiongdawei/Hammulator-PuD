@@ -33,11 +33,18 @@ LDFLAGS += -Lbuild -lswapcpu -lhammer -L$(GEM5_HOME)/util/m5/build/$(TARGET_ISA)
 CC=gcc
 CXX=g++
 
+MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+TRACE_DIR := $(MAKEFILE_DIR)/progs/verify/trace_benchmarks
+TRACE := $(wildcard $(TRACE_DIR)/*.txt)
+
+
 ################################################################################
 
 # This builds gem5.opt with dramsim3.
 hammulator: dramsim3 m5
-	yes | scons -C gem5 build/X86/gem5.opt -j$(shell nproc)
+	env -i HOME=$(HOME) PATH=/usr/bin:/bin \
+	  CC=/usr/bin/gcc CXX=/usr/bin/g++ LINK=/usr/bin/g++ \
+	  /usr/bin/scons -C gem5 build/X86/gem5.opt -j$(shell nproc)
 
 # NOTE: Use this when developing for faster linkage.
 # requires the mold linker
@@ -75,9 +82,9 @@ fix_perf:
 ################################################################################
 
 # A simple binary that tests for Rowhammer bit flips.
-build/tmp_root/verify: progs/verify/verify.c build/libswapcpu.a build/libhammer.a
+build/tmp_root/verify: progs/verify/verify.c progs/verify/rh_core.c build/libswapcpu.a build/libhammer.a
 	mkdir -p build/tmp_root
-	$(CXX) -o build/tmp_root/verify progs/verify/verify.c $(CFLAGS) $(LDFLAGS)
+	$(CXX) -o build/tmp_root/verify progs/verify/verify.c progs/verify/rh_core.c $(CFLAGS) $(LDFLAGS)
 
 build/tmp_root/example: progs/example/example.c build/libswapcpu.a build/libhammer.a
 	mkdir -p build/tmp_root
@@ -122,7 +129,8 @@ fs-restore: build/tmp.img
 	build/X86/gem5.opt $(gem5_args) gem5/configs/example/fs.py $(fs-args) --cpu-type=X86KvmCPU -r 1 --restore-with-cpu=X86KvmCPU --repeat-switch 1
 
 verify: build/tmp_root/verify
-	build/X86/gem5.opt $(gem5_args) gem5/configs/example/se.py $(se-args) --cmd=build/tmp_root/verify
+	build/X86/gem5.opt $(gem5_args) gem5/configs/example/se.py $(se-args) \
+		--cmd=build/tmp_root/verify --options="$(TRACE)"
 
 example: build/tmp_root/example
 	build/X86/gem5.opt $(gem5_args) gem5/configs/example/se.py $(se-args) --cmd=build/tmp_root/example
