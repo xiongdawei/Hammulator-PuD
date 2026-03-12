@@ -81,7 +81,7 @@ fix_perf:
 
 ################################################################################
 
-A simple binary that tests for Rowhammer bit flips.
+# A simple binary that tests for Rowhammer bit flips.
 build/tmp_root/verify: progs/verify/verify.c progs/verify/rh_core.c build/libswapcpu.a build/libhammer.a
 	mkdir -p build/tmp_root
 	$(CXX) -o build/tmp_root/verify progs/verify/verify.c progs/verify/rh_core.c $(CFLAGS) $(LDFLAGS)
