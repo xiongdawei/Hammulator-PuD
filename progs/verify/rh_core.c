@@ -186,6 +186,7 @@ void rh_hammer_from_file(int time, const char *filename) {
                     }
                     if (ptr) {
                         flushaccess(ptr);
+                        printf("Accessed %s at address\n ", tok);
                         increment_access_count(ptr);
                     }
                     tok = strtok(NULL, " \t\r\n");
