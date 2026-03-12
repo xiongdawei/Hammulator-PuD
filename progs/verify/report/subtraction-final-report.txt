@@ -1,0 +1,187 @@
+================== FINAL RH REPORT ==================
+Source trace: /home/daweix3/pud_error/hammgs/verify/trace/ap_trace_01_subtraction-plus-ap_row_summa_row_summary.txt
+
+--------------- REG_FILE ROWS (170 rows) ---------------
+Row    0 | Accesses:          0 | Bitflips: 0
+Row    1 | Accesses:          0 | Bitflips: 0
+Row    2 | Accesses:          0 | Bitflips: 0
+Row    3 | Accesses:         62 | Bitflips: 0
+Row    4 | Accesses:          0 | Bitflips: 0
+Row    5 | Accesses:          0 | Bitflips: 0
+Row    6 | Accesses:          0 | Bitflips: 0
+Row    7 | Accesses:          0 | Bitflips: 0
+Row    8 | Accesses:          0 | Bitflips: 0
+Row    9 | Accesses:          0 | Bitflips: 0
+Row   10 | Accesses:          0 | Bitflips: 0
+Row   11 | Accesses:          0 | Bitflips: 0
+Row   12 | Accesses:          0 | Bitflips: 0
+Row   13 | Accesses:          0 | Bitflips: 0
+Row   14 | Accesses:          0 | Bitflips: 0
+Row   15 | Accesses:          0 | Bitflips: 0
+Row   16 | Accesses:          0 | Bitflips: 0
+Row   17 | Accesses:          0 | Bitflips: 0
+Row   18 | Accesses:          0 | Bitflips: 0
+Row   19 | Accesses:          0 | Bitflips: 0
+Row   20 | Accesses:          0 | Bitflips: 0
+Row   21 | Accesses:          0 | Bitflips: 0
+Row   22 | Accesses:          0 | Bitflips: 0
+Row   23 | Accesses:          0 | Bitflips: 0
+Row   24 | Accesses:          0 | Bitflips: 0
+Row   25 | Accesses:          0 | Bitflips: 0
+Row   26 | Accesses:          0 | Bitflips: 0
+Row   27 | Accesses:          0 | Bitflips: 0
+Row   28 | Accesses:          0 | Bitflips: 0
+Row   29 | Accesses:          0 | Bitflips: 0
+Row   30 | Accesses:          0 | Bitflips: 0
+Row   31 | Accesses:          0 | Bitflips: 0
+Row   32 | Accesses:          0 | Bitflips: 0
+Row   33 | Accesses:          0 | Bitflips: 0
+Row   34 | Accesses:          0 | Bitflips: 0
+Row   35 | Accesses:          0 | Bitflips: 0
+Row   36 | Accesses:          0 | Bitflips: 0
+Row   37 | Accesses:          0 | Bitflips: 0
+Row   38 | Accesses:          0 | Bitflips: 0
+Row   39 | Accesses:          0 | Bitflips: 0
+Row   40 | Accesses:        124 | Bitflips: 0
+Row   41 | Accesses:        124 | Bitflips: 0
+Row   42 | Accesses:        124 | Bitflips: 0
+Row   43 | Accesses:          0 | Bitflips: 0
+Row   44 | Accesses:        124 | Bitflips: 0
+Row   45 | Accesses:        124 | Bitflips: 0
+Row   46 | Accesses:        124 | Bitflips: 0
+Row   47 | Accesses:        124 | Bitflips: 0
+Row   48 | Accesses:        124 | Bitflips: 0
+Row   49 | Accesses:        124 | Bitflips: 0
+Row   50 | Accesses:        124 | Bitflips: 0
+Row   51 | Accesses:        124 | Bitflips: 0
+Row   52 | Accesses:        124 | Bitflips: 0
+Row   53 | Accesses:        123 | Bitflips: 0
+Row   54 | Accesses:        123 | Bitflips: 0
+Row   55 | Accesses:        123 | Bitflips: 0
+Row   56 | Accesses:        123 | Bitflips: 0
+Row   57 | Accesses:        248 | Bitflips: 0
+Row   58 | Accesses:        248 | Bitflips: 0
+Row   59 | Accesses:        248 | Bitflips: 0
+Row   60 | Accesses:        248 | Bitflips: 0
+Row   61 | Accesses:        248 | Bitflips: 0
+Row   62 | Accesses:        248 | Bitflips: 0
+Row   63 | Accesses:        248 | Bitflips: 0
+Row   64 | Accesses:        248 | Bitflips: 0
+Row   65 | Accesses:        248 | Bitflips: 0
+Row   66 | Accesses:        248 | Bitflips: 0
+Row   67 | Accesses:        248 | Bitflips: 0
+Row   68 | Accesses:        246 | Bitflips: 0
+Row   69 | Accesses:        246 | Bitflips: 0
+Row   70 | Accesses:        246 | Bitflips: 0
+Row   71 | Accesses:        246 | Bitflips: 0
+Row   72 | Accesses:        246 | Bitflips: 0
+Row   73 | Accesses:        124 | Bitflips: 0
+Row   74 | Accesses:        124 | Bitflips: 0
+Row   75 | Accesses:        124 | Bitflips: 0
+Row   76 | Accesses:        124 | Bitflips: 0
+Row   77 | Accesses:        124 | Bitflips: 0
+Row   78 | Accesses:        124 | Bitflips: 0
+Row   79 | Accesses:        124 | Bitflips: 0
+Row   80 | Accesses:        124 | Bitflips: 0
+Row   81 | Accesses:        124 | Bitflips: 0
+Row   82 | Accesses:        124 | Bitflips: 0
+Row   83 | Accesses:        124 | Bitflips: 0
+Row   84 | Accesses:        185 | Bitflips: 0
+Row   85 | Accesses:        185 | Bitflips: 0
+Row   86 | Accesses:        185 | Bitflips: 0
+Row   87 | Accesses:        185 | Bitflips: 0
+Row   88 | Accesses:        185 | Bitflips: 0
+Row   89 | Accesses:          0 | Bitflips: 0
+Row   90 | Accesses:          0 | Bitflips: 0
+Row   91 | Accesses:          0 | Bitflips: 0
+Row   92 | Accesses:          0 | Bitflips: 0
+Row   93 | Accesses:          0 | Bitflips: 0
+Row   94 | Accesses:          0 | Bitflips: 0
+Row   95 | Accesses:          0 | Bitflips: 0
+Row   96 | Accesses:          0 | Bitflips: 0
+Row   97 | Accesses:          0 | Bitflips: 0
+Row   98 | Accesses:          0 | Bitflips: 0
+Row   99 | Accesses:          0 | Bitflips: 0
+Row  100 | Accesses:          0 | Bitflips: 0
+Row  101 | Accesses:          0 | Bitflips: 0
+Row  102 | Accesses:          0 | Bitflips: 0
+Row  103 | Accesses:          0 | Bitflips: 0
+Row  104 | Accesses:          0 | Bitflips: 0
+Row  105 | Accesses:          0 | Bitflips: 0
+Row  106 | Accesses:          0 | Bitflips: 0
+Row  107 | Accesses:          0 | Bitflips: 0
+Row  108 | Accesses:          0 | Bitflips: 0
+Row  109 | Accesses:          0 | Bitflips: 0
+Row  110 | Accesses:          0 | Bitflips: 0
+Row  111 | Accesses:          0 | Bitflips: 0
+Row  112 | Accesses:          0 | Bitflips: 0
+Row  113 | Accesses:          0 | Bitflips: 0
+Row  114 | Accesses:          0 | Bitflips: 0
+Row  115 | Accesses:          0 | Bitflips: 0
+Row  116 | Accesses:          0 | Bitflips: 0
+Row  117 | Accesses:          0 | Bitflips: 0
+Row  118 | Accesses:          0 | Bitflips: 0
+Row  119 | Accesses:          0 | Bitflips: 0
+Row  120 | Accesses:          0 | Bitflips: 0
+Row  121 | Accesses:          0 | Bitflips: 0
+Row  122 | Accesses:          0 | Bitflips: 0
+Row  123 | Accesses:          0 | Bitflips: 0
+Row  124 | Accesses:          0 | Bitflips: 0
+Row  125 | Accesses:          0 | Bitflips: 0
+Row  126 | Accesses:          0 | Bitflips: 0
+Row  127 | Accesses:          0 | Bitflips: 0
+Row  128 | Accesses:          0 | Bitflips: 0
+Row  129 | Accesses:          0 | Bitflips: 0
+Row  130 | Accesses:          0 | Bitflips: 0
+Row  131 | Accesses:          0 | Bitflips: 0
+Row  132 | Accesses:          0 | Bitflips: 0
+Row  133 | Accesses:          0 | Bitflips: 0
+Row  134 | Accesses:          0 | Bitflips: 0
+Row  135 | Accesses:          0 | Bitflips: 0
+Row  136 | Accesses:          0 | Bitflips: 0
+Row  137 | Accesses:          0 | Bitflips: 0
+Row  138 | Accesses:          0 | Bitflips: 0
+Row  139 | Accesses:          0 | Bitflips: 0
+Row  140 | Accesses:          0 | Bitflips: 0
+Row  141 | Accesses:          0 | Bitflips: 0
+Row  142 | Accesses:          0 | Bitflips: 0
+Row  143 | Accesses:          0 | Bitflips: 0
+Row  144 | Accesses:          0 | Bitflips: 0
+Row  145 | Accesses:          0 | Bitflips: 0
+Row  146 | Accesses:          0 | Bitflips: 0
+Row  147 | Accesses:          0 | Bitflips: 0
+Row  148 | Accesses:          0 | Bitflips: 0
+Row  149 | Accesses:          0 | Bitflips: 0
+Row  150 | Accesses:          0 | Bitflips: 0
+Row  151 | Accesses:          0 | Bitflips: 0
+Row  152 | Accesses:          0 | Bitflips: 0
+Row  153 | Accesses:          0 | Bitflips: 0
+Row  154 | Accesses:          0 | Bitflips: 0
+Row  155 | Accesses:          0 | Bitflips: 0
+Row  156 | Accesses:          0 | Bitflips: 0
+Row  157 | Accesses:          0 | Bitflips: 0
+Row  158 | Accesses:          0 | Bitflips: 0
+Row  159 | Accesses:          0 | Bitflips: 0
+Row  160 | Accesses:          0 | Bitflips: 0
+Row  161 | Accesses:          0 | Bitflips: 0
+Row  162 | Accesses:          0 | Bitflips: 0
+Row  163 | Accesses:          0 | Bitflips: 0
+Row  164 | Accesses:          0 | Bitflips: 0
+Row  165 | Accesses:          0 | Bitflips: 0
+Row  166 | Accesses:          0 | Bitflips: 0
+Row  167 | Accesses:          0 | Bitflips: 0
+Row  168 | Accesses:          0 | Bitflips: 0
+Row  169 | Accesses:          0 | Bitflips: 1
+
+--------------- SPECIAL ROWS ---------------
+C0       | Accesses:       4083 | Bitflips: 0
+C1       | Accesses:       5938 | Bitflips: 0
+T0       | Accesses:       7917 | Bitflips: 0
+T1       | Accesses:          0 | Bitflips: 7
+T2       | Accesses:        124 | Bitflips: 0
+T3       | Accesses:       9896 | Bitflips: 0
+B_DCC0   | Accesses:          0 | Bitflips: 6
+B_DCC0N  | Accesses:       3958 | Bitflips: 0
+B_DCC1   | Accesses:       3959 | Bitflips: 0
+B_DCC1N  | Accesses:       5939 | Bitflips: 0
+======================================================
