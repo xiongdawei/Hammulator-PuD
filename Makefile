@@ -1,7 +1,7 @@
 # PT privesc exploit
 cpu-clock := 2GHz
 memsize := 200MB
-
+debug-flags := PuDHammer
 # benchmarks
 # cpu-clock := 3GHz
 # memsize := 1GB
@@ -10,13 +10,13 @@ args := --mem-size "$(memsize)" --cpu-clock "$(cpu-clock)" --caches --num-cpus 4
 
 # Make saving multiple checkpoints with differing memory sizes possible.
 outdir := "m5out-$(memsize)"
-gem5_args += --outdir="$(outdir)"
+gem5_args += --outdir="$(outdir)" # --debug-flags="$(debug-flags)"
 
 # Debugging flags:
 # specify with eg make se DEBUG=Uart
 ifdef DEBUG
 # debug to file
-# args += --debug-file=debug
+gem5_args += --debug-file=debug
 gem5_args += --debug-flags="$(DEBUG)"
 endif
 
@@ -28,14 +28,14 @@ se-args := $(args) --cpu-type=X86AtomicSimpleCPU --repeat-switch 1
 TARGET_ISA=x86
 GEM5_HOME=$(realpath ./gem5)
 $(info GEM5_HOME is $(GEM5_HOME))
-CFLAGS += -static -Wall -O2 -I.
+CFLAGS += -static -Wall -O2 -I. -I$(GEM5_HOME)/include -I$(GEM5_HOME)/util/m5/src
 LDFLAGS += -Lbuild -lswapcpu -lhammer -L$(GEM5_HOME)/util/m5/build/$(TARGET_ISA)/out -lm5
 CC=gcc
 CXX=g++
 
 MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
-TRACE_DIR := $(MAKEFILE_DIR)/progs/verify/trace_benchmarks
-TRACE := $(wildcard $(TRACE_DIR)/*.txt)
+TRACE_DIR := $(MAKEFILE_DIR)/progs/verify/trace
+TRACE := $(wildcard $(TRACE_DIR)/00*.txt)
 
 
 ################################################################################

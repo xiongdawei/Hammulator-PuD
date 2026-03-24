@@ -1,0 +1,224 @@
+================== FINAL RH REPORT ==================
+Source trace: /home/daweixor//progs/verify/trace/11_multu-plus_console-hammulator_traulator_trace.txt
+Total Access Count (All Rows): 58415
+
+--------------- PIM OPERATIONS & TIME ---------------
+Total AP Operations:        5952 | Est. Time: 273792 ns
+Total AAP Operations:      16254 | Est. Time: 975240 ns
+-----------------------------------------------------
+Total Est. PIM Execution Time: 1249032 ns (1.249032 ms)
+
+--------------- REG_FILE ROWS (200 rows) ---------------
+Row    0 | Accesses:         25 | Bitflips: 15 | Refresh: 0
+Row    1 | Accesses:          0 | Bitflips: 13 | Refresh: 0
+Row    2 | Accesses:          2 | Bitflips: 1 | Refresh: 0
+Row    3 | Accesses:          0 | Bitflips: 12 | Refresh: 0
+Row    4 | Accesses:       2043 | Bitflips: 0 | Refresh: 0
+Row    5 | Accesses:          0 | Bitflips: 31 | Refresh: 0
+Row    6 | Accesses:       4029 | Bitflips: 0 | Refresh: 0
+Row    7 | Accesses:          2 | Bitflips: 30 | Refresh: 0
+Row    8 | Accesses:       2049 | Bitflips: 0 | Refresh: 0
+Row    9 | Accesses:          0 | Bitflips: 11 | Refresh: 0
+Row   10 | Accesses:          0 | Bitflips: 1 | Refresh: 0
+Row   11 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row   12 | Accesses:          1 | Bitflips: 0 | Refresh: 0
+Row   13 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row   14 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row   15 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row   16 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row   17 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row   18 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row   19 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row   20 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row   21 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row   22 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row   23 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row   24 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row   25 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row   26 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row   27 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row   28 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row   29 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row   30 | Accesses:          1 | Bitflips: 0 | Refresh: 0
+Row   31 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row   32 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row   33 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row   34 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row   35 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row   36 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row   37 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row   38 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row   39 | Accesses:          1 | Bitflips: 0 | Refresh: 0
+Row   40 | Accesses:         65 | Bitflips: 0 | Refresh: 0
+Row   41 | Accesses:          1 | Bitflips: 0 | Refresh: 0
+Row   42 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   43 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   44 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   45 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   46 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   47 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   48 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   49 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   50 | Accesses:         66 | Bitflips: 0 | Refresh: 0
+Row   51 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   52 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   53 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   54 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   55 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   56 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   57 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   58 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   59 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   60 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   61 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   62 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   63 | Accesses:         63 | Bitflips: 0 | Refresh: 0
+Row   64 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row   65 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   66 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   67 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   68 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   69 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   70 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   71 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   72 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   73 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   74 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   75 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   76 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   77 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   78 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   79 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   80 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   81 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   82 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   83 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   84 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   85 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   86 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row   87 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   88 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   89 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   90 | Accesses:         63 | Bitflips: 0 | Refresh: 0
+Row   91 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   92 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   93 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   94 | Accesses:         65 | Bitflips: 0 | Refresh: 0
+Row   95 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   96 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   97 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   98 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row   99 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row  100 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row  101 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row  102 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row  103 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row  104 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row  105 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row  106 | Accesses:         64 | Bitflips: 0 | Refresh: 0
+Row  107 | Accesses:          2 | Bitflips: 0 | Refresh: 0
+Row  108 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row  109 | Accesses:          8 | Bitflips: 0 | Refresh: 0
+Row  110 | Accesses:         14 | Bitflips: 0 | Refresh: 0
+Row  111 | Accesses:         20 | Bitflips: 0 | Refresh: 0
+Row  112 | Accesses:         26 | Bitflips: 0 | Refresh: 0
+Row  113 | Accesses:         31 | Bitflips: 0 | Refresh: 0
+Row  114 | Accesses:         38 | Bitflips: 0 | Refresh: 0
+Row  115 | Accesses:         44 | Bitflips: 0 | Refresh: 0
+Row  116 | Accesses:         50 | Bitflips: 0 | Refresh: 0
+Row  117 | Accesses:         55 | Bitflips: 0 | Refresh: 0
+Row  118 | Accesses:         62 | Bitflips: 0 | Refresh: 0
+Row  119 | Accesses:         68 | Bitflips: 0 | Refresh: 0
+Row  120 | Accesses:         74 | Bitflips: 0 | Refresh: 0
+Row  121 | Accesses:         80 | Bitflips: 0 | Refresh: 0
+Row  122 | Accesses:         86 | Bitflips: 0 | Refresh: 0
+Row  123 | Accesses:         92 | Bitflips: 0 | Refresh: 0
+Row  124 | Accesses:         98 | Bitflips: 0 | Refresh: 0
+Row  125 | Accesses:        104 | Bitflips: 0 | Refresh: 0
+Row  126 | Accesses:        110 | Bitflips: 0 | Refresh: 0
+Row  127 | Accesses:        116 | Bitflips: 0 | Refresh: 0
+Row  128 | Accesses:        122 | Bitflips: 0 | Refresh: 0
+Row  129 | Accesses:        128 | Bitflips: 0 | Refresh: 0
+Row  130 | Accesses:        134 | Bitflips: 0 | Refresh: 0
+Row  131 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row  132 | Accesses:        140 | Bitflips: 0 | Refresh: 0
+Row  133 | Accesses:        146 | Bitflips: 0 | Refresh: 0
+Row  134 | Accesses:        154 | Bitflips: 0 | Refresh: 0
+Row  135 | Accesses:        157 | Bitflips: 0 | Refresh: 0
+Row  136 | Accesses:        164 | Bitflips: 0 | Refresh: 0
+Row  137 | Accesses:        170 | Bitflips: 0 | Refresh: 0
+Row  138 | Accesses:        176 | Bitflips: 0 | Refresh: 0
+Row  139 | Accesses:        183 | Bitflips: 0 | Refresh: 0
+Row  140 | Accesses:        188 | Bitflips: 0 | Refresh: 0
+Row  141 | Accesses:        188 | Bitflips: 0 | Refresh: 0
+Row  142 | Accesses:        182 | Bitflips: 0 | Refresh: 0
+Row  143 | Accesses:        176 | Bitflips: 0 | Refresh: 0
+Row  144 | Accesses:        170 | Bitflips: 0 | Refresh: 0
+Row  145 | Accesses:        164 | Bitflips: 0 | Refresh: 0
+Row  146 | Accesses:        158 | Bitflips: 0 | Refresh: 0
+Row  147 | Accesses:        150 | Bitflips: 0 | Refresh: 0
+Row  148 | Accesses:        146 | Bitflips: 0 | Refresh: 0
+Row  149 | Accesses:        141 | Bitflips: 0 | Refresh: 0
+Row  150 | Accesses:        134 | Bitflips: 0 | Refresh: 0
+Row  151 | Accesses:        127 | Bitflips: 0 | Refresh: 0
+Row  152 | Accesses:        123 | Bitflips: 0 | Refresh: 0
+Row  153 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row  154 | Accesses:        116 | Bitflips: 0 | Refresh: 0
+Row  155 | Accesses:        109 | Bitflips: 0 | Refresh: 0
+Row  156 | Accesses:        105 | Bitflips: 0 | Refresh: 0
+Row  157 | Accesses:         98 | Bitflips: 0 | Refresh: 0
+Row  158 | Accesses:         93 | Bitflips: 0 | Refresh: 0
+Row  159 | Accesses:         87 | Bitflips: 0 | Refresh: 0
+Row  160 | Accesses:         80 | Bitflips: 0 | Refresh: 0
+Row  161 | Accesses:         74 | Bitflips: 0 | Refresh: 0
+Row  162 | Accesses:         68 | Bitflips: 0 | Refresh: 0
+Row  163 | Accesses:         63 | Bitflips: 0 | Refresh: 0
+Row  164 | Accesses:         56 | Bitflips: 0 | Refresh: 0
+Row  165 | Accesses:         50 | Bitflips: 0 | Refresh: 0
+Row  166 | Accesses:         44 | Bitflips: 0 | Refresh: 0
+Row  167 | Accesses:         38 | Bitflips: 0 | Refresh: 0
+Row  168 | Accesses:         32 | Bitflips: 0 | Refresh: 0
+Row  169 | Accesses:         25 | Bitflips: 0 | Refresh: 0
+Row  170 | Accesses:         20 | Bitflips: 0 | Refresh: 0
+Row  171 | Accesses:         14 | Bitflips: 0 | Refresh: 0
+Row  172 | Accesses:          8 | Bitflips: 0 | Refresh: 0
+Row  173 | Accesses:          3 | Bitflips: 0 | Refresh: 0
+Row  174 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row  175 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row  176 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row  177 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row  178 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row  179 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row  180 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row  181 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row  182 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row  183 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row  184 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row  185 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row  186 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row  187 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row  188 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row  189 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row  190 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row  191 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row  192 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row  193 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row  194 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row  195 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row  196 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row  197 | Accesses:          0 | Bitflips: 0 | Refresh: 0
+Row  198 | Accesses:          0 | Bitflips: 2 | Refresh: 0
+Row  199 | Accesses:          0 | Bitflips: 55 | Refresh: 0
+
+--------------- SPECIAL ROWS ---------------
+C0       | Accesses:       2110 | Bitflips: 0 | Refresh: 0
+C1       | Accesses:          0 | Bitflips: 569 | Refresh: 0
+T0       | Accesses:       7996 | Bitflips: 0 | Refresh: 0
+T1       | Accesses:       6008 | Bitflips: 0 | Refresh: 0
+T2       | Accesses:       7989 | Bitflips: 0 | Refresh: 0
+T3       | Accesses:       7930 | Bitflips: 0 | Refresh: 0
+B_DCC0   | Accesses:          0 | Bitflips: 537 | Refresh: 0
+B_DCC0N  | Accesses:          3 | Bitflips: 335 | Refresh: 0
+B_DCC1   | Accesses:       6065 | Bitflips: 0 | Refresh: 0
+B_DCC1N  | Accesses:       1980 | Bitflips: 0 | Refresh: 0
+======================================================
