@@ -71,6 +71,8 @@
 #include "sim/stats.hh"
 #include "sim/system.hh"
 
+uint64_t global_rowhammer_attack_mode = 0;
+
 namespace gem5
 {
 
@@ -505,6 +507,9 @@ void
 workbegin(ThreadContext *tc, uint64_t workid, uint64_t threadid)
 {
     DPRINTF(PseudoInst, "pseudo_inst::workbegin(%i, %i)\n", workid, threadid);
+
+    global_rowhammer_attack_mode = workid;
+
     System *sys = tc->getSystemPtr();
     const System::Params &params = sys->params();
 

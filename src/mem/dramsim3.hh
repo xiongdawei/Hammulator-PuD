@@ -43,15 +43,20 @@
 #ifndef __MEM_DRAMSIM3_HH__
 #define __MEM_DRAMSIM3_HH__
 
+#include <cstdint>
 #include <functional>
+#include <map>
 #include <queue>
 #include <random>
-#include <unordered_map>
+#include <set>
 #include <tuple>
+#include <unordered_map>
 
 #include "mem/abstract_mem.hh"
 #include "mem/dramsim3_wrapper.hh"
 #include "mem/qport.hh"
+
+extern uint64_t global_rowhammer_attack_mode;
 
 namespace gem5
 {
@@ -62,7 +67,33 @@ namespace memory
 class DRAMsim3 : public AbstractMemory
 {
   private:
+    struct SaltSubarrayState
+    {
+        int64_t actCtr = 0;
+        uint32_t nextBundleRow = 0;
+        uint32_t nextRow = 0;
+        uint32_t refAccumulator = 0;
+    };
 
+    struct SaltBankState
+    {
+        uint32_t nextRefSubarray = 0;
+    };
+
+    enum AttackMode
+    {
+        NORMAL = 0,
+        SiMRA = 1,
+        CoMRA = 2,
+        RESET_BYPASS = 3
+    };
+    AttackMode current_attack_mode = NORMAL;
+    AttackMode last_recorded_mode = NORMAL;
+    std::map<int, uint64_t> last_acc_tick;
+    std::map<int, int> last_acc_row;
+
+    std::default_random_engine rng;
+    int get_row_threshold(uint64_t row_base_addr);
     /**
      * The memory port has to deal with its own flow control to avoid
      * having unbounded storage that is implicitly created in the port
@@ -97,10 +128,19 @@ class DRAMsim3 : public AbstractMemory
 
     std::unordered_map<uint64_t,double> hammer_count;
     std::unordered_map<uint64_t,double> probabilities;
+    std::unordered_map<uint64_t, int> per_row_threshold;
+    std::unordered_map<uint64_t, int> prac_count;
     std::set<uint64_t> flipped;
     std::minstd_rand para_rng;
+    std::unordered_map<uint64_t, SaltSubarrayState> saltSubarrayState;
+    std::unordered_map<uint64_t, SaltBankState> saltBankState;
 
     dramsim3::Config* config;
+
+    uint64_t saltAbos = 0;
+    uint64_t saltAboMitigations = 0;
+    uint64_t saltRefMitigations = 0;
+    uint64_t saltRowsRefreshed = 0;
 
     /**
      * Callback functions
@@ -211,18 +251,54 @@ class DRAMsim3 : public AbstractMemory
      */
     void writeComplete(unsigned id, uint64_t addr, bool bufferhit);
 
-     /**
+    /**
      * Refresh completion callback.
      */
     void refreshComplete(unsigned id, int channel, int bankgroup, int bank);
 
 
     void PARA(int channel, int rank, int bankgroup, int bank, int row);
+    void PRAC_ABO(int channel, int rank, int bankgroup, int bank, int row);
 
     std::unordered_map<uint64_t,int> trr_count;
     void TRR(int channel, int rank, int bankgroup, int bank, int row);
 
     double gen_proba(uint64_t addr);
+
+    uint64_t bankKey(int channel, int rank, int bankgroup, int bank) const;
+    uint64_t subarrayKey(int channel, int rank, int bankgroup, int bank,
+                         int subarray) const;
+    int saltRowsPerRef() const;
+    int subarrayForRow(int row) const;
+    int rowIndexInSubarray(int row) const;
+    int bankRowFromSubarray(int subarray, int row_index) const;
+    SaltSubarrayState& getSaltSubarrayState(int channel, int rank,
+                                            int bankgroup, int bank,
+                                            int subarray);
+    SaltBankState& getSaltBankState(int channel, int rank, int bankgroup,
+                                    int bank);
+    void clearSaltRow(int channel, int rank, int bankgroup, int bank, int row);
+    void clearSaltRowsInSubarray(int channel, int rank, int bankgroup,
+                                 int bank, int subarray, int count,
+                                 bool wrap_rows);
+    void performSaltRefreshForBank(int channel, int rank, int bankgroup,
+                                   int bank);
+    void performSaltAbo();
+    void performSaltAboForBank(int channel, int rank, int bankgroup, int bank);
+    bool noteActivation(int channel, int rank, int bankgroup, int bank,
+                        int row, bool bufferhit);
+    bool notePracActivation(int channel, int rank, int bankgroup, int bank,
+                            int row, bool bufferhit);
+
+    // Counters for rowhammer mitigation overhead tracking.
+    uint64_t prac_abos = 0;
+    uint64_t prac_preventions = 0;
+    uint64_t trr_calls = 0;
+    uint64_t trr_preventions = 0;  // Times TRR cleared hammer_count
+    uint64_t para_calls = 0;
+    uint64_t para_preventions = 0; // Times PARA cleared hammer_count
+
+    void printMitigationStats();
 
     DrainState drain() override;
 

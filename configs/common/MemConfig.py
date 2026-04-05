@@ -33,6 +33,9 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+import os
+
+import m5
 import m5.objects
 from common import ObjectList
 from common import HMC
@@ -237,6 +240,19 @@ def config_mem(options, system):
 
                 # Create the controller that will drive the interface
                 mem_ctrl = dram_intf.controller()
+
+                # Keep DRAMsim3 outputs with the active gem5 outdir so each
+                # run writes stats/traces next to its own config and stats.txt.
+                if isinstance(mem_ctrl, m5.objects.DRAMsim3):
+                    output_root = m5.options.outdir or os.getcwd()
+                    if nbr_mem_ctrls == 1:
+                        dramsim_dir = os.path.abspath(output_root)
+                    else:
+                        dramsim_dir = os.path.abspath(
+                            os.path.join(output_root, f"dramsim3_ch{i}")
+                        )
+                    os.makedirs(dramsim_dir, exist_ok=True)
+                    mem_ctrl.filePath = dramsim_dir + os.sep
 
                 mem_ctrls.append(mem_ctrl)
 

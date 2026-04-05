@@ -37,14 +37,18 @@
 
 #include "mem/dramsim3.hh"
 
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <random>
+#include <unordered_map>
+
 #include "base/callback.hh"
 #include "base/trace.hh"
 #include "debug/DRAMsim3.hh"
 #include "debug/Drain.hh"
+#include "debug/PuDHammer.hh"
 #include "sim/system.hh"
-
-#include <cstdint>
-#include <random>
 
 namespace gem5
 {
@@ -79,9 +83,13 @@ DRAMsim3::DRAMsim3(const Params &p) :
 
     para_rng = std::minstd_rand(0);
 
+    rng.seed(config->spatial_variation_seed);
     // Register a callback to compensate for the destructor not
     // being called. The callback prints the DRAMsim3 stats.
-    registerExitCallback([this]() { wrapper.printStats(); });
+    registerExitCallback([this]() {
+        wrapper.printStats();
+        printMitigationStats();
+    });
 }
 
 void
@@ -320,23 +328,301 @@ inline double DRAMsim3::gen_proba(uint64_t addr) {
     }
 }
 
-void DRAMsim3::PARA(int channel, int rank, int bankgroup, int bank, int row) {
-    for (int dist=-5; dist<=5; dist++) {
-        if (dist == 0 || row+dist < 0 || row+dist>=config->rows) {
+uint64_t
+DRAMsim3::bankKey(int channel, int rank, int bankgroup, int bank) const
+{
+    return (static_cast<uint64_t>(channel & 0xffff) << 48) |
+           (static_cast<uint64_t>(rank & 0xffff) << 32) |
+           (static_cast<uint64_t>(bankgroup & 0xffff) << 16) |
+           static_cast<uint64_t>(bank & 0xffff);
+}
+
+uint64_t
+DRAMsim3::subarrayKey(int channel, int rank, int bankgroup, int bank,
+                      int subarray) const
+{
+    return (bankKey(channel, rank, bankgroup, bank) << 16) |
+           static_cast<uint64_t>(subarray & 0xffff);
+}
+
+int
+DRAMsim3::saltRowsPerRef() const
+{
+    return std::max(1, config->rows / 8192);
+}
+
+int
+DRAMsim3::subarrayForRow(int row) const
+{
+    if (config->salt_row_striping) {
+        return row % config->salt_subarrays;
+    }
+    return row / config->salt_rows_per_subarray;
+}
+
+int
+DRAMsim3::rowIndexInSubarray(int row) const
+{
+    if (config->salt_row_striping) {
+        return row / config->salt_subarrays;
+    }
+    return row % config->salt_rows_per_subarray;
+}
+
+int
+DRAMsim3::bankRowFromSubarray(int subarray, int row_index) const
+{
+    if (config->salt_row_striping) {
+        return row_index * config->salt_subarrays + subarray;
+    }
+    return subarray * config->salt_rows_per_subarray + row_index;
+}
+
+DRAMsim3::SaltSubarrayState&
+DRAMsim3::getSaltSubarrayState(int channel, int rank, int bankgroup, int bank,
+                               int subarray)
+{
+    return saltSubarrayState[subarrayKey(channel, rank, bankgroup, bank,
+                                         subarray)];
+}
+
+DRAMsim3::SaltBankState&
+DRAMsim3::getSaltBankState(int channel, int rank, int bankgroup, int bank)
+{
+    return saltBankState[bankKey(channel, rank, bankgroup, bank)];
+}
+
+void
+DRAMsim3::clearSaltRow(int channel, int rank, int bankgroup, int bank, int row)
+{
+    uint64_t row_base = config->ReverseAddressMapping(
+        channel, rank, bankgroup, bank, row, 0);
+    hammer_count.erase(row_base);
+    saltRowsRefreshed++;
+}
+
+void
+DRAMsim3::clearSaltRowsInSubarray(int channel, int rank, int bankgroup,
+                                  int bank, int subarray, int count,
+                                  bool wrap_rows)
+{
+    auto &state =
+        getSaltSubarrayState(channel, rank, bankgroup, bank, subarray);
+    uint32_t &pointer = config->salt_coord_refresh ?
+        state.nextRow : state.nextBundleRow;
+
+    int rows_to_clear = count;
+    while (rows_to_clear > 0) {
+        if (pointer >= static_cast<uint32_t>(config->salt_rows_per_subarray)) {
+            pointer = 0;
+        }
+
+        int remaining = config->salt_rows_per_subarray - pointer;
+        int chunk = wrap_rows ? std::min(rows_to_clear, remaining)
+                              : std::min(rows_to_clear, remaining);
+        for (int i = 0; i < chunk; ++i) {
+            int row = bankRowFromSubarray(subarray, pointer + i);
+            clearSaltRow(channel, rank, bankgroup, bank, row);
+        }
+
+        pointer += chunk;
+        rows_to_clear -= chunk;
+        if (!wrap_rows) {
+            break;
+        }
+        if (pointer >= static_cast<uint32_t>(config->salt_rows_per_subarray)) {
+            pointer = 0;
+        }
+    }
+
+    if (!wrap_rows && pointer >=
+            static_cast<uint32_t>(config->salt_rows_per_subarray)) {
+        pointer = 0;
+    }
+}
+
+void
+DRAMsim3::performSaltRefreshForBank(int channel, int rank, int bankgroup,
+                                    int bank)
+{
+    auto &bank_state = getSaltBankState(channel, rank, bankgroup, bank);
+    const int rows_per_ref = saltRowsPerRef();
+
+    for (int i = 0; i < rows_per_ref; ++i) {
+        int subarray =
+            (bank_state.nextRefSubarray + i) % config->salt_subarrays;
+        auto &state =
+            getSaltSubarrayState(channel, rank, bankgroup, bank, subarray);
+        int row = bankRowFromSubarray(subarray, state.nextRow);
+        clearSaltRow(channel, rank, bankgroup, bank, row);
+        state.nextRow = (state.nextRow + 1) % config->salt_rows_per_subarray;
+
+        state.refAccumulator += config->salt_apm;
+        int reduction = state.refAccumulator / config->salt_bundle_rows;
+        state.refAccumulator %= config->salt_bundle_rows;
+        state.actCtr = std::max<int64_t>(0, state.actCtr - reduction);
+        saltRefMitigations++;
+    }
+
+    bank_state.nextRefSubarray =
+        (bank_state.nextRefSubarray + rows_per_ref) % config->salt_subarrays;
+}
+
+void
+DRAMsim3::performSaltAboForBank(int channel, int rank, int bankgroup, int bank)
+{
+    int selected_subarray = -1;
+    int64_t selected_ctr = 0;
+    for (int subarray = 0; subarray < config->salt_subarrays; ++subarray) {
+        auto &state = getSaltSubarrayState(channel, rank, bankgroup, bank,
+                                           subarray);
+        if (state.actCtr > selected_ctr) {
+            selected_ctr = state.actCtr;
+            selected_subarray = subarray;
+        }
+    }
+
+    if (selected_subarray < 0 || selected_ctr <= 0) {
+        return;
+    }
+
+    clearSaltRowsInSubarray(channel, rank, bankgroup, bank, selected_subarray,
+                            config->salt_bundle_rows,
+                            config->salt_coord_refresh);
+    auto &state = getSaltSubarrayState(channel, rank, bankgroup, bank,
+                                       selected_subarray);
+    state.actCtr = std::max<int64_t>(0, state.actCtr - config->salt_apm);
+    saltAboMitigations++;
+}
+
+void
+DRAMsim3::performSaltAbo()
+{
+    saltAbos++;
+    for (int channel = 0; channel < config->channels; ++channel) {
+        for (int rank = 0; rank < config->ranks; ++rank) {
+            for (int bankgroup = 0;
+                 bankgroup < config->bankgroups; ++bankgroup) {
+                for (int bank = 0; bank < config->banks_per_group; ++bank) {
+                    performSaltAboForBank(channel, rank, bankgroup, bank);
+                }
+            }
+        }
+    }
+}
+
+bool
+DRAMsim3::noteActivation(int channel, int rank, int bankgroup, int bank,
+                         int row, bool bufferhit)
+{
+    uint64_t row_base = config->ReverseAddressMapping(channel, rank, bankgroup,
+                                                      bank, row, 0);
+    hammer_count.erase(row_base);
+
+    if (bufferhit || !config->salt_enabled) {
+        return false;
+    }
+
+    auto &state = getSaltSubarrayState(channel, rank, bankgroup, bank,
+                                       subarrayForRow(row));
+    state.actCtr++;
+    return state.actCtr > config->salt_ath;
+}
+
+bool
+DRAMsim3::notePracActivation(int channel, int rank, int bankgroup, int bank,
+                             int row, bool bufferhit)
+{
+    if (bufferhit || !config->prac_abo_enabled) {
+        return false;
+    }
+    uint64_t row_base = config->ReverseAddressMapping(channel, rank,
+                                                      bankgroup, bank, row, 0);
+    auto &count = prac_count[row_base];
+    count++;
+    return count >= config->prac_threshold;
+}
+
+void
+DRAMsim3::PARA(int channel, int rank, int bankgroup, int bank, int row)
+{
+    para_calls++;
+    for (int dist = -5; dist <= 5; dist++) {
+        if (dist == 0 || row + dist < 0 || row + dist >= config->rows) {
             continue;
         }
         double rand = std::generate_canonical<double, 10>(para_rng);
         if (rand > config->para_proba) {
             continue;
         }
-        uint64_t target = config->ReverseAddressMapping(channel, rank, bankgroup, bank, row+dist, 0);
+        uint64_t target = config->ReverseAddressMapping(channel, rank,
+                                                        bankgroup, bank,
+                                                        row + dist, 0);
+        if (hammer_count.find(target) != hammer_count.end()) {
+            para_preventions++;
+        }
         hammer_count.erase(target);
     }
 }
 
-void DRAMsim3::TRR(int channel, int rank, int bankgroup, int bank, int row) {
-    for (int dist=-5; dist<=5; dist++) {
-        if (dist == 0 || row+dist < 0 || row+dist>=config->rows) {
+void
+DRAMsim3::PRAC_ABO(int channel, int rank, int bankgroup, int bank, int row)
+{
+    prac_abos++;
+    uint64_t row_base = config->ReverseAddressMapping(channel, rank,
+                                                      bankgroup, bank, row, 0);
+    prac_count.erase(row_base);
+
+    for (int dist = -config->prac_blast_radius;
+         dist <= config->prac_blast_radius; dist++) {
+        if (dist == 0 || row + dist < 0 || row + dist >= config->rows) {
+            continue;
+        }
+
+        int refreshed_row = row + dist;
+        uint64_t target = config->ReverseAddressMapping(channel, rank,
+                                                        bankgroup, bank,
+                                                        refreshed_row, 0);
+
+        if (hammer_count.find(target) != hammer_count.end()) {
+            prac_preventions++;
+        }
+        hammer_count.erase(target);
+
+        for (int sec_dist = -5; sec_dist <= 5; sec_dist++) {
+            int sec_row = refreshed_row + sec_dist;
+
+            if (sec_dist == 0 || sec_row < 0 || sec_row >= config->rows) {
+                continue;
+            }
+
+            double add = 0;
+            switch (abs(sec_dist)) {
+                case 5: add = config->inc_dist_5; break;
+                case 4: add = config->inc_dist_4; break;
+                case 3: add = config->inc_dist_3; break;
+                case 2: add = config->inc_dist_2; break;
+                case 1: add = config->inc_dist_1; break;
+            }
+
+            uint64_t sec_target = config->ReverseAddressMapping(channel, rank,
+                                                                bankgroup,
+                                                                bank, sec_row,
+                                                                0);
+            hammer_count[sec_target] += add;
+        }
+    }
+    DPRINTF(PuDHammer,
+            "PRAC+ABO refreshed row %d in ch %d rank %d bg %d bank %d\n",
+            row, channel, rank, bankgroup, bank);
+}
+
+void
+DRAMsim3::TRR(int channel, int rank, int bankgroup, int bank, int row)
+{
+    trr_calls++;
+    for (int dist = -5; dist <= 5; dist++) {
+        if (dist == 0 || row + dist < 0 || row + dist >= config->rows) {
             continue;
         }
         uint64_t target = config->ReverseAddressMapping(channel, rank, bankgroup, bank, row+dist, 0);
@@ -347,14 +633,98 @@ void DRAMsim3::TRR(int channel, int rank, int bankgroup, int bank, int row) {
         }
 
         if (trr_count[target] > config->trr_threshold) {
+            if (hammer_count.find(target) != hammer_count.end()) {
+                trr_preventions++;
+            }
             hammer_count.erase(target);
         }
     }
 }
 
+int DRAMsim3::get_row_threshold(uint64_t row_base_addr) {
+    if (!config->spatial_variation_enabled) {
+        return config->hc_first;
+    }
+
+    auto it = per_row_threshold.find(row_base_addr);
+    if (it != per_row_threshold.end()) {
+        return it->second;
+    }
+
+    std::mt19937_64 row_rng(
+        static_cast<uint64_t>(config->spatial_variation_seed) ^
+        (row_base_addr * 0x9E3779B97F4A7C15ULL));
+    const double u = std::generate_canonical<double, 53>(row_rng);
+
+    auto interp_log = [](double x, double x0, double x1,
+                         double y0, double y1) {
+        if (x1 <= x0 || y0 <= 0.0 || y1 <= 0.0) {
+            return y1;
+        }
+        const double t = (x - x0) / (x1 - x0);
+        return std::exp(std::log(y0) + t * (std::log(y1) - std::log(y0)));
+    };
+
+    double multiplier = 1.0;
+    if (u < 0.01) {
+        multiplier = interp_log(
+            u, 0.00, 0.01, 1.0, config->spatial_q01_multiplier);
+    } else if (u < 0.05) {
+        multiplier = interp_log(
+            u, 0.01, 0.05,
+            config->spatial_q01_multiplier,
+            config->spatial_q05_multiplier);
+    } else if (u < 0.10) {
+        multiplier = interp_log(
+            u, 0.05, 0.10,
+            config->spatial_q05_multiplier,
+            config->spatial_q10_multiplier);
+    } else {
+        multiplier = interp_log(
+            u, 0.10, 1.00,
+            config->spatial_q10_multiplier,
+            config->spatial_q100_multiplier);
+    }
+
+    int new_threshold =
+        std::lround(static_cast<double>(config->hc_first) * multiplier);
+    if (new_threshold < 100) new_threshold = 100;
+
+    per_row_threshold[row_base_addr] = new_threshold;
+    return new_threshold;
+}
+
 void DRAMsim3::readComplete(unsigned id, uint64_t addr, bool bufferhit)
 {
     DPRINTF(DRAMsim3, "Read to address %lld complete\n", addr);
+
+    current_attack_mode =
+        static_cast<AttackMode>(global_rowhammer_attack_mode);
+
+    if (current_attack_mode != NORMAL) {
+       DPRINTF(PuDHammer, "Read to address %lld complete\n", addr);
+    }
+
+    if (current_attack_mode != last_recorded_mode) {
+        switch (current_attack_mode) {
+            case NORMAL:
+                DPRINTF(PuDHammer, ">>> Logic Switch: NORMAL\n");
+                break;
+            case SiMRA:
+                DPRINTF(PuDHammer, ">>> Logic Switch: SiMRA\n");
+                break;
+            case CoMRA:
+                DPRINTF(PuDHammer, ">>> Logic Switch: CoMRA\n");
+                break;
+            case RESET_BYPASS:
+                DPRINTF(PuDHammer, ">>> Logic Switch: RESET_BYPASS\n");
+                break;
+            default:
+                DPRINTF(PuDHammer, ">>> Warning: Unknown Mode %lu\n",
+                        global_rowhammer_attack_mode);
+        }
+        last_recorded_mode = current_attack_mode;
+    }
 
     auto a = config->AddressMapping(addr);
     int channel = a.channel;
@@ -362,6 +732,10 @@ void DRAMsim3::readComplete(unsigned id, uint64_t addr, bool bufferhit)
     int bankgroup = a.bankgroup;
     int bank = a.bank;
     int row = a.row;
+
+    // int bank_id = (channel << 12) | (rank << 8 ) | (bankgroup << 4) | bank;
+
+    // uint64_t current_tick = curTick();
 
     // get the outstanding reads for the address in question
     auto p = outstandingReads.find(addr);
@@ -383,17 +757,21 @@ void DRAMsim3::readComplete(unsigned id, uint64_t addr, bool bufferhit)
     // perform the actual memory access
     accessAndRespond(pkt);
 
-    // Refresh the accessed row
-    uint64_t row_base = config->ReverseAddressMapping(channel, rank, bankgroup, bank, row, 0);
-    hammer_count.erase(row_base);
+    bool triggerSalt = noteActivation(channel, rank, bankgroup, bank, row,
+                                      bufferhit);
+    bool triggerPrac = notePracActivation(channel, rank, bankgroup, bank, row,
+                                          bufferhit);
 
     // no rowhammer effects when rowbuffer hit
     if (bufferhit) {
+        DPRINTF(PuDHammer,
+                "Row buffer hit for address %lld, skipping rowhammer logic\n",
+                addr);
         return;
     }
 
-    for (int dist=-5; dist<=5; dist++) {
-        if (dist == 0 || row+dist < 0 || row+dist>=config->rows) {
+    for (int dist = -5; dist <= 5; dist++) {
+        if (dist == 0 || row + dist < 0 || row + dist >= config->rows) {
             continue;
         }
         double add = 0;
@@ -420,21 +798,88 @@ void DRAMsim3::readComplete(unsigned id, uint64_t addr, bool bufferhit)
             continue;
         }
 
-        uint64_t flipped_row_base = config->ReverseAddressMapping(channel, rank, bankgroup, bank, row+dist, 0);
-        if(hammer_count.find(flipped_row_base) == hammer_count.end()) {
+
+        // handle temperature
+        // --- Temperature
+        double temp_multiplier = 1.0;
+
+        if (current_attack_mode == SiMRA &&
+            config->temperature > config->baseline_temperature) {
+            temp_multiplier = 1.0 + config->temperature_scale_factor *
+                (config->temperature - config->baseline_temperature);
+
+            DPRINTF(PuDHammer,
+                    "Temperature increased to %.2f, applying multiplier "
+                    "%.2f to bit flip probability\n",
+                    config->temperature, temp_multiplier);
+        }
+
+        if (current_attack_mode == SiMRA) {
+            add *= config->SiMRA_weight;
+        } else if (current_attack_mode == CoMRA) {
+            add *= config->CoMRA_weight;
+        }
+
+        // handle tAggOn
+        double taggon_multiplier = 1.0;
+
+        double excess_ratio =
+            (config->tAggOn - config->tRAS_baseline_ticks) /
+            (config->tAggOn_max_ticks - config->tRAS_baseline_ticks);
+
+
+
+        add = add * temp_multiplier;
+
+        uint64_t flipped_row_base = config->ReverseAddressMapping(
+            channel, rank, bankgroup, bank, row + dist, 0);
+        if (hammer_count.find(flipped_row_base) == hammer_count.end()) {
             hammer_count.insert(std::make_pair(flipped_row_base, add));
             // Don't check against threshold here since we should be way below
             continue;
         }
 
         hammer_count[flipped_row_base] += add;
-        if (hammer_count[flipped_row_base] < config->hc_first) {
+        //DPRINTF(PuDHammer, "This is from distance %d\n", dist);
+        DPRINTF(PuDHammer,
+                "Incremented hammer count for row 0x%016lx by %.4f, new "
+                "count: %.4f\n",
+                flipped_row_base, add, hammer_count[flipped_row_base]);
+
+        // double row_flip_rate = config->hc_last_bitflip_rate *
+        //     (hammer_count[flipped_row_base] - config->hc_first) /
+        //     (config->hc_last - config->hc_first);
+
+        const double dynamic_hc_first =
+            static_cast<double>(get_row_threshold(flipped_row_base));
+        if (hammer_count[flipped_row_base] < dynamic_hc_first) {
             continue;
         }
 
-        double row_flip_rate = config->hc_last_bitflip_rate
-                *std::min((hammer_count[flipped_row_base]-config->hc_first)/(config->hc_last-config->hc_first), 1.0);
-        for (uint64_t quad=flipped_row_base; quad<flipped_row_base+config->row_size; quad+=sizeof(uint64_t)) {
+        const double dynamic_hc_last =
+            std::max(static_cast<double>(config->hc_last),
+                     dynamic_hc_first + 1.0);
+
+        const double current_hammer_count =
+            std::min(hammer_count[flipped_row_base], dynamic_hc_last);
+
+        double normalized_hc = 0.0;
+        if (current_hammer_count > dynamic_hc_first) {
+            normalized_hc = (current_hammer_count - dynamic_hc_first) /
+                (dynamic_hc_last - dynamic_hc_first);
+            normalized_hc = std::clamp(normalized_hc, 0.0, 1.0);
+        }
+
+        // Use a non-linear burst curve so early hammering causes few flips,
+        // while activity close to HC_last ramps up much faster.
+        const double non_linear_factor =
+            std::pow(normalized_hc, config->non_linear_degree);
+        const double row_flip_rate =
+            config->hc_last_bitflip_rate * non_linear_factor;
+
+        for (uint64_t quad = flipped_row_base;
+             quad < flipped_row_base + config->row_size;
+             quad += sizeof(uint64_t)) {
             if (flipped.find(quad) != flipped.end()) {
                 // already flipped
                 continue;
@@ -482,6 +927,9 @@ void DRAMsim3::readComplete(unsigned id, uint64_t addr, bool bufferhit)
 
             // flip with mask
             *(uint64_t*)this->toHostAddr(quad) ^= mask;
+            DPRINTF(PuDHammer,
+                    "Bit flip at address 0x%016lx, mask: 0x%016lx\n",
+                    quad, mask);
         }
     }
 
@@ -491,11 +939,20 @@ void DRAMsim3::readComplete(unsigned id, uint64_t addr, bool bufferhit)
     if (config->trr_enabled) {
         TRR(channel, rank, bankgroup, bank, row);
     }
+    if (config->prac_abo_enabled && triggerPrac) {
+        PRAC_ABO(channel, rank, bankgroup, bank, row);
+    }
+    if (config->salt_enabled && triggerSalt) {
+        performSaltAbo();
+    }
 }
 
-void DRAMsim3::writeComplete(unsigned id, uint64_t addr, bool bufferhit)
+void
+DRAMsim3::writeComplete(unsigned id, uint64_t addr, bool bufferhit)
 {
     DPRINTF(DRAMsim3, "Write to address %lld complete\n", addr);
+    current_attack_mode =
+        static_cast<AttackMode>(global_rowhammer_attack_mode);
 
     // get the outstanding reads for the address in question
     auto p = outstandingWrites.find(addr);
@@ -513,30 +970,154 @@ void DRAMsim3::writeComplete(unsigned id, uint64_t addr, bool bufferhit)
     if (nbrOutstanding() == 0)
         signalDrainDone();
 
-    // Refresh the written row
     auto a = config->AddressMapping(addr);
-    uint64_t row_base = config->ReverseAddressMapping(a.channel, a.rank, a.bankgroup, a.bank, a.row, 0);
+    if (current_attack_mode == RESET_BYPASS) {
+        uint64_t row_base = config->ReverseAddressMapping(
+            a.channel, a.rank, a.bankgroup, a.bank, a.row, 0);
+        hammer_count.erase(row_base);
+        for (uint64_t quad = row_base;
+             quad < row_base + config->row_size;
+             quad += sizeof(uint64_t)) {
+            flipped.erase(quad);
+        }
+        return;
+    }
+
+    bool triggerSalt = noteActivation(a.channel, a.rank, a.bankgroup, a.bank,
+                                      a.row, bufferhit);
+    bool triggerPrac = notePracActivation(a.channel, a.rank, a.bankgroup,
+                                          a.bank, a.row, bufferhit);
+
+    // Refresh the written row and make it flippable again.
+    uint64_t row_base = config->ReverseAddressMapping(
+        a.channel, a.rank, a.bankgroup, a.bank, a.row, 0);
     hammer_count.erase(row_base);
-    // Also make it flippable again
-    for (uint64_t quad=row_base; quad<row_base+config->row_size; quad+=sizeof(uint64_t)) {
+    for (uint64_t quad = row_base;
+         quad < row_base + config->row_size;
+         quad += sizeof(uint64_t)) {
         flipped.erase(quad);
+    }
+    if (triggerPrac) {
+        PRAC_ABO(a.channel, a.rank, a.bankgroup, a.bank, a.row);
+    }
+    if (triggerSalt) {
+        performSaltAbo();
     }
 }
 
-void DRAMsim3::refreshComplete(unsigned id, int channel, int bankgroup, int bank)
+void
+DRAMsim3::refreshComplete(unsigned id, int channel, int bankgroup, int bank)
 {
-    for(auto it= hammer_count.begin(); it != hammer_count.end();){
-        dramsim3::Address a = config->AddressMapping(it->first);
-        if((a.channel == channel) &&
-           ((a.bankgroup == bankgroup) || (bankgroup == -1)) &&
-           ((a.bank == bank) || (bank == -1))){
-                // NOTE: flipped is not erased here since we dont want to flip mutliple times
-                it = hammer_count.erase(it);
+    const int actual_channel = id;
+    const int rank = channel;
+
+    if (config->salt_enabled && config->salt_coord_refresh) {
+        if (bankgroup == -1 || bank == -1) {
+            for (int bg = 0; bg < config->bankgroups; ++bg) {
+                for (int ba = 0; ba < config->banks_per_group; ++ba) {
+                    performSaltRefreshForBank(actual_channel, rank, bg, ba);
+                }
+            }
         } else {
-            it++;
+            performSaltRefreshForBank(actual_channel, rank, bankgroup, bank);
+        }
+        DPRINTF(DRAMsim3,
+                "SALT-C refresh at channel %d rank %d bankgroup %d bank %d\n",
+                actual_channel, rank, bankgroup, bank);
+        for (auto it = prac_count.begin(); it != prac_count.end();) {
+            dramsim3::Address a = config->AddressMapping(it->first);
+            if ((a.channel == actual_channel) &&
+                ((a.rank == rank) || (rank == -1)) &&
+                ((a.bankgroup == bankgroup) || (bankgroup == -1)) &&
+                ((a.bank == bank) || (bank == -1))) {
+                it = prac_count.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        return;
+    }
+
+    for (auto it = hammer_count.begin(); it != hammer_count.end();) {
+        dramsim3::Address a = config->AddressMapping(it->first);
+        if ((a.channel == actual_channel) &&
+            ((a.rank == rank) || (rank == -1)) &&
+            ((a.bankgroup == bankgroup) || (bankgroup == -1)) &&
+            ((a.bank == bank) || (bank == -1))) {
+            // NOTE: flipped is not erased here since we dont want to
+            // flip mutliple times
+            it = hammer_count.erase(it);
+        } else {
+            ++it;
         }
     }
-    DPRINTF(DRAMsim3, "Refresh at channel %d bankgroup %d bank %d complete\n", channel, bankgroup, bank);
+    for (auto it = prac_count.begin(); it != prac_count.end();) {
+        dramsim3::Address a = config->AddressMapping(it->first);
+        if ((a.channel == actual_channel) &&
+            ((a.rank == rank) || (rank == -1)) &&
+            ((a.bankgroup == bankgroup) || (bankgroup == -1)) &&
+            ((a.bank == bank) || (bank == -1))) {
+            it = prac_count.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    DPRINTF(DRAMsim3,
+            "Refresh at channel %d rank %d bankgroup %d bank %d complete\n",
+            actual_channel, rank, bankgroup, bank);
+}
+
+void DRAMsim3::printMitigationStats()
+{
+    DPRINTF(DRAMsim3, "=== Rowhammer Mitigation Statistics ===\n");
+    DPRINTF(DRAMsim3, "SALT Enabled: %s\n",
+            config->salt_enabled ? "yes" : "no");
+    if (config->salt_enabled) {
+        DPRINTF(DRAMsim3,
+                "SALT Mode: %s (APM=%d ATH=%d subarrays=%d "
+                "rows/subarray=%d bundle=%d)\n",
+                config->salt_coord_refresh ? "SALT-C" : "SALT",
+                config->salt_apm, config->salt_ath, config->salt_subarrays,
+                config->salt_rows_per_subarray, config->salt_bundle_rows);
+        DPRINTF(DRAMsim3, "SALT ABOs: %lu\n", saltAbos);
+        DPRINTF(DRAMsim3, "SALT ABO Bank Mitigations: %lu\n",
+                saltAboMitigations);
+        DPRINTF(DRAMsim3, "SALT REF Mitigations: %lu\n", saltRefMitigations);
+        DPRINTF(DRAMsim3, "SALT Rows Refreshed: %lu\n", saltRowsRefreshed);
+        DPRINTF(DRAMsim3, "\n");
+    }
+    DPRINTF(DRAMsim3, "PRAC_ABO Enabled: %s\n",
+            config->prac_abo_enabled ? "yes" : "no");
+    if (config->prac_abo_enabled) {
+        DPRINTF(DRAMsim3, "PRAC Threshold: %d\n", config->prac_threshold);
+        DPRINTF(DRAMsim3, "PRAC Blast Radius: %d\n",
+                config->prac_blast_radius);
+        DPRINTF(DRAMsim3, "PRAC ABOs: %lu\n", prac_abos);
+        DPRINTF(DRAMsim3, "PRAC Prevented Bit Flips: %lu\n",
+                prac_preventions);
+        DPRINTF(DRAMsim3, "\n");
+    }
+    DPRINTF(DRAMsim3, "TRR Calls: %lu\n", trr_calls);
+    DPRINTF(DRAMsim3, "TRR Prevented Bit Flips: %lu\n", trr_preventions);
+    if (trr_calls > 0) {
+        DPRINTF(DRAMsim3, "TRR Prevention Rate: %.2f%% (prevented %lu/%lu)\n",
+                (double)trr_preventions / trr_calls * 100,
+                trr_preventions, trr_calls);
+    }
+    DPRINTF(DRAMsim3, "\n");
+    DPRINTF(DRAMsim3, "PARA Calls: %lu\n", para_calls);
+    DPRINTF(DRAMsim3, "PARA Prevented Bit Flips: %lu\n", para_preventions);
+    if (para_calls > 0) {
+        DPRINTF(DRAMsim3, "PARA Prevention Rate: %.2f%% (prevented %lu/%lu)\n",
+                (double)para_preventions / para_calls * 100,
+                para_preventions, para_calls);
+    }
+    DPRINTF(DRAMsim3, "\n");
+    DPRINTF(DRAMsim3, "Total Mitigation Activations: %lu\n",
+            prac_abos + trr_calls + para_calls);
+    DPRINTF(DRAMsim3, "Total Prevented Bit Flips: %lu\n",
+            prac_preventions + trr_preventions + para_preventions);
+    DPRINTF(DRAMsim3, "=========================================\n");
 }
 
 Port&

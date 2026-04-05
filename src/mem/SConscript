@@ -154,6 +154,8 @@ DebugFlag('HMCController')
 DebugFlag('SerialLink')
 DebugFlag('TokenPort')
 
+DebugFlag('PuDHammer')
+
 DebugFlag("MemChecker")
 DebugFlag("MemCheckerMonitor")
 DebugFlag("QOS")
