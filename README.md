@@ -1,275 +1,290 @@
-# Hammulator
+# PuD-Hammulator
 
-This repository contains the source code for the [Hammulator framework](https://dramsec.ethz.ch/papers/hammulator.pdf) presented at [DRAMSec23](https://dramsec.ethz.ch/2023.html).
+PuD-Hammulator is a `gem5` + `DRAMsim3` based rowhammer simulation framework for studying Processing-using-DRAM style rowhammer behavior, attack-mode switching, and mitigation mechanisms.
 
-## Obtaining Sources
+This repository keeps the Hammulator-specific code, helper libraries, workloads, and patch sets used to modify upstream `gem5` and `DRAMsim3`.
 
-``` sh
-# first clone this repo
-git clone https://github.com/cispa/hammulator
-# then clone gem5 into the subdirectory gem5
+## What Is In This Repo
+
+- `gem5-patches/`: patch series for upstream `gem5`
+- `DRAMsim3-patches/`: patch series for upstream `DRAMsim3`
+- `Makefile`: build and run entry points
+- `libhammer.*`: helper library for virtual-to-physical translation and simple timing helpers
+- `libswapcpu.*`: helper library for CPU switching in `gem5`
+- `progs/`: example, verification, and exploit workloads
+
+## Tested Base Versions
+
+- `gem5`: `v22.1.0.0`
+- `DRAMsim3`: `1.0.0`
+
+## Installation
+
+### 1. Clone this repository
+
+```bash
+git clone <your-repo-url> PuD-Hammulator
+cd PuD-Hammulator
+```
+
+### 2. Clone the upstream dependencies
+
+```bash
 git clone -b v22.1.0.0 https://github.com/gem5/gem5 gem5
-# and finish with cloning DRAMsim3 into gem5/ext/dramsim3/DRAMsim3
-git clone -b 1.0.0 https://github.com/umd-memsys/DRAMSim3 gem5/ext/dramsim3/DRAMsim3
+git clone -b 1.0.0 https://github.com/umd-memsys/DRAMSim3 \
+    gem5/ext/dramsim3/DRAMsim3
 ```
 
-## Patching
+### 3. Install build dependencies
 
-Now we need to patch both gem5 and DRAMsim3 with the Hammulator changes.
-For that, make sure that you are on tag `v22.1.0.0` for gem5 and `1.0.0` for DRAMsim3.
-You can also use the `checkout.sh` script to make sure that you are on the correct commit.
-Then apply the patches from the `hammulator` directory.
-Use the apply script for convenience:
+For Ubuntu 22.04/24.04, the following packages are enough for the current tree:
 
-``` sh
-./checkout.sh
-./apply.sh
+```bash
+sudo apt update
+sudo apt install -y \
+    build-essential git m4 scons zlib1g zlib1g-dev \
+    libprotobuf-dev protobuf-compiler libprotoc-dev \
+    libgoogle-perftools-dev python3-dev libboost-all-dev pkg-config \
+    cmake libinih-dev genext2fs
 ```
 
-## Dependencies
+## Applying The Patches
 
-All dependencies listed on the [gem5 building guide](https://www.gem5.org/documentation/general_docs/building).
+The modified implementation lives in the local `gem5` and `DRAMsim3` trees, but the repository also ships patch bundles so the setup can be recreated from clean upstream checkouts.
 
-For Ubuntu 22.04 that is:
+### Patch `gem5`
 
-``` sh
-sudo apt install build-essential git m4 scons zlib1g zlib1g-dev \
-    libprotobuf-dev protobuf-compiler libprotoc-dev libgoogle-perftools-dev \
-    python3-dev libboost-all-dev pkg-config
+```bash
+git -C gem5 checkout v22.1.0.0
+git -C gem5 am ../gem5-patches/*.patch
 ```
 
-Plus the following for building DRAMsim3:
-``` sh
-sudo apt install cmake libinih-dev
+### Patch `DRAMsim3`
+
+```bash
+git -C gem5/ext/dramsim3/DRAMsim3 checkout 1.0.0
+git -C gem5/ext/dramsim3/DRAMsim3 am ../../../../DRAMsim3-patches/*.patch
 ```
 
-### Docker-based Environment
-
-For ease of use, we provide a Docker-based compilation environment in `Dockerfile`.
-Either build it locally:
-``` sh
-docker build -t hammulator-interactive --target=hammulator-interactive .
-```
-
-Or pull it:
-``` sh
-docker pull fabianthomas/hammulator-interactive:latest
-```
-
-Create a container:
-```sh
-docker run -dit -v .:/root/hammulator --name hammulator-interactive <hammulator-interactive or fabianthomas/hammulator-interactive:latest>
-```
-
-And attach:
-```sh
-docker exec -w /root/hammulator -it hammulator-interactive zsh
-```
-
-You can now proceed building in the container.
-
-### Dependencies for full-system emulation
-
-``` sh
-sudo apt install genext2fs
-```
+If you already have local edits in either tree, commit or stash them before running `git am`.
 
 ## Building
 
-Once all repos have been cloned and appropriately patched, we can build gem5 (check the [gem5 building guide](https://www.gem5.org/documentation/general_docs/building) for further help):
+Build DRAMsim3, the `m5` helper binary, and `gem5`:
 
-``` sh
+```bash
 make hammulator
 ```
 
-This Makefile target builds both gem5 and DRAMsim3 into Hammulator.
+Useful partial targets:
 
-# Usage
-
-Once Hammulator is built, there are two possible paths to explore.
-With syscall emulation you can run simple Rowhammer tests and test mitigations.
-OS APIs are used, therefore, e.g., no page table can be hammered.
-For that you need full-system emulation.
-Syscall emulation requires minimal setup, therefore it is the suggested method to proceed for becoming familiar with Hammulator. 
-
-Note [this issue](https://github.com/cispa/hammulator/issues/1) when you encounter problems in this section specifying that something is wrong with performance counters.
-
-## Syscall emulation
-
-Syscall emulation can directly be used through the `se.sh` script:
-```
-./se.sh path/to/binary
+```bash
+make dramsim3
+make m5
+make compile_commands
 ```
 
-For everything more than quick experimenting we recommend extending the Makefile by a new target for your binary.
+## PuD-Hammulator Features
 
-We provide the example target (`progs/example/example.c`) to quickly showcase `libswapcpu`, `libhammer`, and basic bit flips.
-Run as:
-``` sh
+### Attack Modes
+
+PuD-Hammulator extends `gem5` so workloads can switch rowhammer behavior at runtime using:
+
+```c
+#include <gem5/m5ops.h>
+m5_work_begin(mode_id, 0);
+```
+
+The implementation currently interprets `mode_id` as:
+
+- `0`: `NORMAL`
+- `1`: `SiMRA`
+- `2`: `CoMRA`
+- `3`: `RESET_BYPASS`
+
+When writing workload-side helper macros, treat this mapping as the source of truth.
+
+`m5_work_begin()` is handled in `gem5/src/sim/pseudo_inst.cc`, and the selected mode is consumed by the DRAMsim3 model in `gem5/src/mem/dramsim3.cc`.
+
+### New Modeling Support
+
+Compared with the original Hammulator setup, this tree adds or extends:
+
+- Runtime attack-mode switching through `m5_work_begin()`
+- `NORMAL`, `SiMRA`, and `CoMRA` attack behaviors
+- `RESET_BYPASS` mode for reset/initialization phases
+- Temperature-aware hammer amplification
+- `tAggOn`-related attack tuning knobs
+- Spatial row-vulnerability variation
+- Non-linear bit-flip growth near `HC_last`
+- Mitigation statistics printed at simulation exit
+- Additional mitigation models:
+  - `PARA`
+  - `TRR`
+  - `PRAC+ABO`
+  - `SALT`
+  - `SALT-C`
+
+### Output Handling
+
+`configs/common/MemConfig.py` has been updated so DRAMsim3 outputs are written into the active `gem5` output directory, which keeps per-run stats and traces together under `m5out-*`.
+
+## DRAM Configuration Parameters
+
+The main DRAM/rowhammer configuration file is:
+
+`gem5/ext/dramsim3/DRAMsim3/configs/DDR4_8Gb_x8_2400.ini`
+
+The most important PuD-Hammulator parameters are below.
+
+### Core Rowhammer Parameters
+
+- `HC_first`: hammer count where flips begin
+- `HC_last`: hammer count where additional flips saturate
+- `HC_last_bitflip_rate`: quadword flip probability near `HC_last`
+- `non_linear_degree`: controls the non-linear flip-rate ramp
+- `inc_dist_1` ... `inc_dist_5`: distance-dependent disturbance weights
+- `proba_1_bit_flipped` ... `proba_4_bit_flipped`: per-quadword flip multiplicity
+- `flip_mask`: optional fixed mask instead of probabilistic bit selection
+
+### PuD Attack Parameters
+
+- `SiMRA_weight`
+- `CoMRA_weight`
+- `temperature`
+- `baseline_temperature`
+- `temperature_scale_factor`
+- `tRAS_baseline_ticks`
+- `tAggOn`
+- `tAggOn_max_ticks`
+- `simra_taggon_max_penalty`
+- `normal_taggon_max_penalty`
+
+### Spatial Variation Parameters
+
+- `spatial_variation_enabled`
+- `spatial_variation_seed`
+- `spatial_q01_multiplier`
+- `spatial_q05_multiplier`
+- `spatial_q10_multiplier`
+- `spatial_q100_multiplier`
+
+These parameters model the fact that not all rows are equally vulnerable.
+
+### Mitigation Parameters
+
+- `para_enabled`
+- `para_proba`
+- `trr_enabled`
+- `trr_threshold`
+- `prac_abo_enabled`
+- `prac_threshold`
+- `prac_blast_radius`
+- `salt_enabled`
+- `salt_coord_refresh`
+- `salt_row_striping`
+- `salt_bundle_rows`
+- `salt_rows_per_subarray`
+- `salt_subarrays`
+- `salt_target_max_activations`
+- `salt_apm`
+- `salt_ath`
+
+## Running Simulations
+
+### Syscall Emulation
+
+Syscall emulation is the fastest way to test the memory model and workloads.
+
+Run the bundled example:
+
+```bash
 make example
 ```
 
-Expected output:
-```
-000 paddr=e0000
-001 paddr=e8000
-Found bit flips at 0x7ffff7202568 with pattern: 0000000040000000
-002 paddr=f0000
-003 paddr=f8000
-004 paddr=100000
-Found bit flips at 0x7ffff721a4e8 with pattern: 0000000040000000
-005 paddr=108000
-006 paddr=110000
-007 paddr=118000
-008 paddr=120000
+Run the verification workload:
+
+```bash
+make verify
 ```
 
-## Full-system emulation
+Run your own binary:
 
-Full-system emulation is more complicated than syscall emulation since a GNU/Linux disk image is needed.
-The following sections describe how to create such an image and how to run your binary in the full-system emulator.
-
-### Image Creation
-
-In this step you have three options:
-1. Using our provided image downloadable [here](https://github.com/cispa/hammulator/raw/ubuntu-img/x86-ubuntu-18.04-patched.img.zip).
-   You are all setup by downloading the image to `img/x86-ubuntu-18.04-patched.img`
-2. Downloading an image from [gem5 Resources](http://resources.gem5.org/).
-   Optionally patch in the scripts as discussed below.
-   Copy the img to a directory of your choice but make sure to update the Makefile (`--disk-image=/path/to/your/img`).
-3. Building your own custom gem5 bootable disk image.
-   Can be tricky depending on your experience.
-   Gem5 requires a few modifications to GNU/Linux images specified [here](https://www.gem5.org/documentation/general_docs/fullsystem/disks).
-   Therefore we recommend to follow one of the options discussed on above linked page.
-   Again, patch in the scripts as discussed below and update the Makefile to respect the images location (`--disk-image=/path/to/your/img`).
-
-Copying the convenience scripts into the image can be either be done during image creation or afterwards:
-``` sh
-# Check this answer on how to get the correct offset:
-# https://unix.stackexchange.com/a/82315
-sudo mount -o loop,offset=<correct-offset> /path/to/img /mnt
-cp img/bin/* /mnt/usr/local/bin
+```bash
+make se CMD=/absolute/path/to/your_binary
 ```
 
-### Downloading a kernel
+The default syscall-emulation configuration uses:
 
-You are free on how you get a kernel.
-We recommend obtaining one from [gem5 Resources](http://resources.gem5.org/resources/x86-linux-kernel-5.4.49).
-We used [`vmlinux-5.4.49`](http://dist.gem5.org/dist/v22-0/kernels/x86/static/vmlinux-5.4.49).
+- `--cpu-type=X86AtomicSimpleCPU`
+- `--repeat-switch 1`
+- `--mem-type=DRAMsim3`
 
-Update the Makefile to reflect the path of your kernel (`--kernel=./img/x86-linux-kernel-5.4.49`).
+### Full-System Simulation
 
-### Installing m5term
+Full-system runs use the disk and kernel paths currently set in the top-level `Makefile`:
 
-Follow the instructions [here](https://www.gem5.org/documentation/general_docs/fullsystem/m5term) to install `m5term`, the client with which you will connect to the simulation.
+- `./img/x86-linux-kernel-5.4.49`
+- `./img/x86-ubuntu-18.04-patched.img`
 
-### Creating a Checkpoint
+First create the helper disk image and a checkpoint:
 
-Due to an issue with gem5 in combination with DRAMSim3, the image we created in the previous section cannot easily be booted with KVM[^1].
-Therefore, we suggest to first create a checkpoint of the system with a less performant CPU (`SimpleAtomicCPU`), and then to restore that checkpoint with the KVM CPU[^2].
-
-Checkpoint creation is easy with the following Makefile target:
-
-``` sh
+```bash
 make fs-create-checkpoint
 ```
 
-Note that this process can take up to an hour and needs to be done for each memory size. 
-The Makefile thereby handles moving the checkpoints for you.
+Then restore and run:
 
-To monitor what is going on during the checkpoint creation launch above command with the tmux wrapper script:
-``` sh
-./tmux.sh make fs-create-checkpoint
-```
-
-### Restoring a Checkpoint
-
-Restoring a checkpoint is as easy as:
-
-```sh
+```bash
 make fs-restore
 ```
 
-Note that this command only starts gem5 and does not attach to stdout/stdin.
-For that either run `m5term localhost 3456`[^3] after starting the simulator or run above command with tmux wrapper:
+Attach to the guest with:
 
-```sh
-./tmux.sh make fs-restore
+```bash
+m5term localhost 3456
 ```
 
-In either case you should find yourself in a Gnu/Linux shell now.
+The build system places helper binaries into `build/tmp_root/` and packs them into `build/tmp.img`, which is mounted as an extra disk in full-system mode.
 
-### Runnig your binary
+## Switching Modes Inside A Workload
 
-To run your binary in the emulator we first need to mount a temporary drive into the emulator.
-For that simple execute the `m` (mount) script that you previously copied into the disk image.
-For that simply type `m` into the shell and hit Enter.
+The current implementation uses `workid` from `m5_work_begin(workid, threadid)` as the rowhammer mode selector.
 
-Now that the temporary image is mounted into the emulator you can run the default binary with the `r` (run) command.
-For other binaries run them as `/mnt/binary-name` as you would do on a regular Gnu/Linux system.
-Note that there are also `mr` and `umr` for mounting+running and remounting+running respectively.
+Example:
 
-The default run target can be changed in `img/tmp_root/run.sh`.
+```c
+#include <gem5/m5ops.h>
 
-### Running the Google Project Zero privelege escalation exploit
-
-When the repository is in a clean state and you have followed the previous steps these instructions should make the exploit run for you:
-1. `./tmux.sh make fs-create-checkpoint`
-2. Wait for the simulation to boot up.
-   Then type `mr` and hit Enter.
-3. Now the exploit should be running.
-   When it fails (which it does sometimes, see below), run it again by either typing `r` or restarting the simulation (press `CTRL+C` in shell where you launched gem5).
-
-### Problems in full-system emulation
-
-While the problems described in this section only occur in full-system emulation, they may also occur in syscall emulation.
-
-When running binaries in full-system emulation, the binary sometimes just stops executing or gets really slow.
-This can be reproduced by running the following bash command in the full-system emulation shell:
+#define SET_MODE_NORMAL m5_work_begin(0, 0)
+#define SET_MODE_SIMRA  m5_work_begin(1, 0)
+#define SET_MODE_COMRA  m5_work_begin(2, 0)
+#define SET_MODE_RESET  m5_work_begin(3, 0)
 ```
-for i in {0..10000}; do echo "$i"; done
-```
-You will notice that the command randomly stops executing at a number.
-The simulation does not crash, you can just interrupt the shell by pressing `CTRL+C`.
 
-We could not find the root cause of this but it only happens once you use DRAMsim3 together with gem5 (without our changes).
-Maybe this problem will get fixed in a future version of DRAMsim.
-We suspect that this would decrease the runtime of the privilege escalation exploit further.
+A typical usage pattern is:
 
-## Varying parameters
-
-The memory size can be changed in the Makefile with the `memsize` variable.
-Note again that checkpoint recreation is needed when this value changes.
-
-DRAM and Rowhammer specific parameters can be changed in `gem5/ext/dramsim3/DRAMsim3/configs/DDR4_8Gb_x8_2400.ini`.
-The ini file comments explain the Rowhammer parameters.
-For details check the paper.
+1. Enter reset mode while initializing or rewriting memory.
+2. Switch back to `NORMAL` before the actual experiment.
+3. Enter `SiMRA` or `CoMRA` during the attack phase.
 
 ## Debugging
 
-All Makefile targets support debug flags.
-To, e.g., run full-system emulation with the debug flag `DRAMsim3` execute the following command: 
+The Makefile already enables `DRAMsim3,PuDHammer` debug flags by default. You can override them per run:
 
-``` sh
-./tmux.sh make fs-restore DEBUG=DRAMsim3
+```bash
+make verify DEBUG=DRAMsim3,PuDHammer
+make fs-restore DEBUG=DRAMsim3,PuDHammer
 ```
 
-The available flags can be checked with `build/X86/gem5.opt --debug-help`.
-Also check the [gem5 docs](https://www.gem5.org/documentation/learning_gem5/part2/debugging).
+To see the full list of `gem5` debug flags:
 
-# Citation
-
-If you use our tool in your work please cite our paper as:
-
-``` bibtex
-@inproceedings{thomas2023hammulator,
-  author = {Thomas, Fabian and Gerlach, Lukas and Schwarz, Michael},
-  booktitle = {DRAMSec},
-  title = {{Hammulator: Simulate Now -- Exploit Later}},
-  year = {2023}
-}
+```bash
+build/X86/gem5.opt --debug-help
 ```
 
-[^1]: TODO. We are trying to fix this problem with the gem5 devs.
-[^2]: The KVM CPU is faster by a large margin. Check the paper for details.
-[^3]: Note that 3456 is only the default port used by gem5. This can vary when you have multiple running instances.
+## Notes
+
+- The top-level repository is meant to track Hammulator code and patch bundles; `gem5` itself is ignored by `.gitignore`.
+- `DRAMsim3` stats and traces are written next to each run's `gem5` output directory.
+- If you change `memsize` in the Makefile, recreate full-system checkpoints.
