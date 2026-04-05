@@ -1,7 +1,7 @@
-From 13333d8262179e7606400b88883708fad4f6261b Mon Sep 17 00:00:00 2001
+From 7f365b0d52fd97ac89eb08894b61e516bbc5edde Mon Sep 17 00:00:00 2001
 From: Fabian Thomas <fabian@fabianthomas.de>
 Date: Fri, 16 Jun 2023 11:06:07 +0200
-Subject: [PATCH 5/6] cpu switching
+Subject: [PATCH 4/6] cpu switching
 
 ---
  configs/common/Simulation.py | 38 ++++++++++++++++++++++++------------
@@ -85,5 +85,5 @@ index 731b3fcaa5..386f0fdbfb 100644
                  testsys, repeat_switch_cpu_list, maxtick, options.repeat_switch
              )
 -- 
-2.41.0
+2.50.1
 

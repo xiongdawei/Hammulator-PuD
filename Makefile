@@ -1,7 +1,7 @@
 # PT privesc exploit
 cpu-clock := 2GHz
-memsize := 200MB
-debug-flags := PuDHammer
+memsize := 2GB
+debug-flags := DRAMsim3,PuDHammer
 # benchmarks
 # cpu-clock := 3GHz
 # memsize := 1GB
@@ -10,13 +10,16 @@ args := --mem-size "$(memsize)" --cpu-clock "$(cpu-clock)" --caches --num-cpus 4
 
 # Make saving multiple checkpoints with differing memory sizes possible.
 outdir := "m5out-$(memsize)"
-gem5_args += --outdir="$(outdir)" # --debug-flags="$(debug-flags)"
+gem5_args += --outdir="$(outdir)"
+
+ifneq ($(strip $(debug-flags)),)
+gem5_args += --debug-file=debug
+gem5_args += --debug-flags="$(debug-flags)"
+endif
 
 # Debugging flags:
 # specify with eg make se DEBUG=Uart
 ifdef DEBUG
-# debug to file
-gem5_args += --debug-file=debug
 gem5_args += --debug-flags="$(DEBUG)"
 endif
 
@@ -34,7 +37,7 @@ CC=gcc
 CXX=g++
 
 MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
-TRACE_DIR := $(MAKEFILE_DIR)/progs/verify/trace
+TRACE_DIR := $(MAKEFILE_DIR)/progs/verify/microworkloads
 TRACE := $(wildcard $(TRACE_DIR)/00*.txt)
 
 

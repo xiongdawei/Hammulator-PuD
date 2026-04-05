@@ -1,4 +1,4 @@
-From dd233b26e265b050cf8968aba565f69d82846265 Mon Sep 17 00:00:00 2001
+From 08a3cb35ee3bd326d652c3ff8b6d897d8e439cdf Mon Sep 17 00:00:00 2001
 From: Fabian Thomas <fabian@fabianthomas.de>
 Date: Fri, 16 Jun 2023 10:48:51 +0200
 Subject: [PATCH 2/6] update gitignore
@@ -22,5 +22,5 @@ index 229a0d5ae9..b48ae6d4f7 100644
 +dramsim3epoch.json
 +compile_commands.json
 -- 
-2.41.0
+2.50.1
 
