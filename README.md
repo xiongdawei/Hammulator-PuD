@@ -1,6 +1,6 @@
 # PuD-Hammulator
 
-PuD-Hammulator is a `gem5` + `DRAMsim3` based rowhammer simulation framework for studying Processing-using-DRAM style rowhammer behavior, attack-mode switching, and mitigation mechanisms.
+PuD-Hammulator is a `gem5` + `DRAMsim3` based rowhammer simulation framework for studying Processing-using-DRAM(PuD) style rowhammer behavior, attack-mode switching, and mitigation mechanisms.
 
 This repository keeps the Hammulator-specific code, helper libraries, workloads, and patch sets used to modify upstream `gem5` and `DRAMsim3`.
 
@@ -219,33 +219,6 @@ The default syscall-emulation configuration uses:
 - `--cpu-type=X86AtomicSimpleCPU`
 - `--repeat-switch 1`
 - `--mem-type=DRAMsim3`
-
-### Full-System Simulation
-
-Full-system runs use the disk and kernel paths currently set in the top-level `Makefile`:
-
-- `./img/x86-linux-kernel-5.4.49`
-- `./img/x86-ubuntu-18.04-patched.img`
-
-First create the helper disk image and a checkpoint:
-
-```bash
-make fs-create-checkpoint
-```
-
-Then restore and run:
-
-```bash
-make fs-restore
-```
-
-Attach to the guest with:
-
-```bash
-m5term localhost 3456
-```
-
-The build system places helper binaries into `build/tmp_root/` and packs them into `build/tmp.img`, which is mounted as an extra disk in full-system mode.
 
 ## Switching Modes Inside A Workload
 
