@@ -1,0 +1,104 @@
+From 766b694a837ae9cdffc3985bac25a172faaa9bf1 Mon Sep 17 00:00:00 2001
+From: David Xiong <daweix3@hermit-03.csl.illinois.edu>
+Date: Mon, 6 Apr 2026 16:29:16 -0500
+Subject: [PATCH] Patch DDR4 8Gb x8 2400 config for Hammulator
+
+---
+ configs/DDR4_8Gb_x8_2400.ini | 62 +++++++++++++++++++++++++++++++-----
+ 1 file changed, 54 insertions(+), 8 deletions(-)
+
+diff --git a/configs/DDR4_8Gb_x8_2400.ini b/configs/DDR4_8Gb_x8_2400.ini
+index 69953d7..859d136 100644
+--- a/configs/DDR4_8Gb_x8_2400.ini
++++ b/configs/DDR4_8Gb_x8_2400.ini
+@@ -71,17 +71,46 @@ trans_queue_size = 320000
+ 
+ [rowhammer]
+ # Number of hammers so that the first bit flips start to occur.
+-HC_first = 10000.0
++HC_first = 4000
+ # Number of hammers where no new flips occur anymore.
+-HC_last = 150000.0
++HC_last = 10000
++
++# Spatial Variation 
++spatial_variation_enabled = true
++spatial_variation_seed = 1337
++# HCfirst distribution relative to the most vulnerable row's HCfirst.
++# 99%, 95%, and 90% of rows are at least these multipliers, respectively.
++spatial_q01_multiplier = 1.6
++spatial_q05_multiplier = 2.0
++spatial_q10_multiplier = 2.2
++# Upper tail for the least vulnerable rows.
++spatial_q100_multiplier = 3.0
++
++
++# From the PuDHammer paper, the weights for the SiMRA and CoMRA counters.
++SiMRA_weight = 200
++CoMRA_weight = 10
++
++# Temperature assuing it's stable over the time 
++temperature = 50
++baseline_temperature = 50 
++temperature_scale_facotr = 0.0667;
++
++# tAggOn parameter for the PuDHammer attack, which is the time it takes for the SiMRA and CoMRA counters to decay by 1.
++tRAS_baseline_ticks = 39
++tAggOn = 39
++tAggOn_max_ticks = 70200
++simra_taggon_max_penalty = 270.0
++normal_taggon_max_penalty = 3.0
+ 
+ # Probability that a quadword flips at HC_last
+-# this scales linearly with HC
++# this is modulated by the non-linear HC growth curve below
+ HC_last_bitflip_rate = 0.005
++non_linear_degree = 3.0
+ 
+-inc_dist_1 = 1.0
+-inc_dist_2 = 0.0
+-inc_dist_3 = 0.0
++inc_dist_1 = 1
++inc_dist_2 = 0.3
++inc_dist_3 = 0.1
+ inc_dist_4 = 0.0
+ inc_dist_5 = 0.0
+ 
+@@ -98,10 +127,28 @@ proba_4_bit_flipped = 0.0
+ para_proba = 0.001
+ para_enabled = false
+ 
++# PRAC+ABO mitigation
++prac_abo_enabled = false
++prac_threshold = 100
++prac_blast_radius = 2
++
+ # Threshold so that it is just below HC_first
+-trr_threshold = 8000
++trr_threshold = 3000
+ trr_enabled = false
+ 
++# SALT / SALT-C (HPCA 2026)
++# If salt_apm / salt_ath are omitted or set to 0, they are derived from
++# salt_target_max_activations using the paper's MaxACT relation.
++salt_enabled = false
++salt_coord_refresh = false
++salt_row_striping = true
++salt_bundle_rows = 7
++salt_rows_per_subarray = 512
++salt_subarrays = 128
++salt_target_max_activations = 3000
++salt_apm = 0
++salt_ath = 0
++
+ [other]
+ epoch_period = 1204819
+ output_level = 1
+@@ -115,4 +162,3 @@ amb_temp = 40; The ambient temperature in [C]
+ mat_dim_x = 512;
+ mat_dim_y = 512;
+ bank_order = 0; 0: x direction first, 1: y direction first
+-
+-- 
+2.50.1
+
