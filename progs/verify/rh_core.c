@@ -16,13 +16,17 @@
 #define SET_MODE_NORMAL    m5_work_begin(0, 0)
 #define SET_MODE_COMRA     m5_work_begin(1, 0)
 #define SET_MODE_SIMRA     m5_work_begin(2, 0)
+#define SET_MODE_RESET     m5_work_begin(3, 0)
+#define SET_TRACE_BASE_ADDR(addr) m5_work_begin(4, (uint64_t)(addr))
+#define CLEAR_TRACE_ROWS() m5_work_begin(5, 0)
+#define ADD_TRACE_ROW_BASE(addr) m5_work_begin(6, (uint64_t)(addr))
 
 #define PAGE_SIZE 4096
-#define D_ROW_SIZE 200
+#define D_ROW_SIZE 300
 #define C_ROW_SIZE 2
 #define B_ROW_SIZE 8
-#define T_ROW_SIZE 3
-#define SPECIAL_ROW_COUNT (C_ROW_SIZE + B_ROW_SIZE + T_ROW_SIZE)
+#define R_ROW_SIZE 3
+#define SPECIAL_ROW_COUNT (C_ROW_SIZE + B_ROW_SIZE + R_ROW_SIZE)
 #define DIST (1 << (6 + 7 + 2))  // 32KB row size
 #define MAX_ROWS_PER_LINE 6
 #define tAP 46
@@ -32,6 +36,7 @@
 typedef struct {
     uint32_t offsets[MAX_ROWS_PER_LINE];
     int num_rows;
+    int command_type; 
 } hammer_event_t;
 
 const int rowsize = 2 * PAGE_SIZE;
@@ -43,13 +48,13 @@ const char* special_row_sequence[SPECIAL_ROW_COUNT] = {
     "C0", "C1",
     "T0", "T1", "T2", "T3",
     "B_DCC0", "B_DCC0N", "B_DCC1", "B_DCC1N",
-    "TMR0", "TMR1", "TMR2"
+    "R0", "R1", "R2"
 };
 
 static uint8_t *dram;
 static uint8_t *reg_file[D_ROW_SIZE];
 static uint8_t *C0, *C1, *T0, *T1, *T2, *T3, *B_DCC0, *B_DCC0N, *B_DCC1, *B_DCC1N;
-static uint8_t *TMR0, *TMR1, *TMR2;
+static uint8_t *R0, *R1, *R2;
 
 static uint64_t regfile_access_count[D_ROW_SIZE];
 static uint64_t special_access_count[SPECIAL_ROW_COUNT];
@@ -62,6 +67,20 @@ static uint64_t total_aap_count = 0;
 static uint64_t total_refresh_count = 0;
 
 uint64_t co = 0; 
+
+static void reset_dram_contents(void) {
+    if (!dram) {
+        return;
+    }
+
+    SET_MODE_RESET;
+    size_t word_count = (size_t)(DIST * (D_ROW_SIZE + SPECIAL_ROW_COUNT)) / sizeof(uint64_t);
+    uint64_t *words = (uint64_t *)dram;
+    for (size_t i = 0; i < word_count; i++) {
+        words[i] = co;
+    }
+    SET_MODE_NORMAL;
+}
 
 static inline void flushaccess(void *p) {
     asm volatile("clflush 0(%0)\n"
@@ -78,7 +97,7 @@ static uint64_t frame_number_from_pagemap(uint64_t value) {
     return value & ((1ULL << 54) - 1);
 }
 
-static uint64_t get_physical_addr(uintptr_t virtual_addr) {
+static uint64_t get_host_physical_addr(uintptr_t virtual_addr) {
     int fd = open("/proc/self/pagemap", O_RDONLY);
     assert(fd >= 0);
     off_t pos = lseek(fd, (virtual_addr / page_size) * 8, SEEK_SET);
@@ -91,10 +110,39 @@ static uint64_t get_physical_addr(uintptr_t virtual_addr) {
     return (frame_number_from_pagemap(value) * page_size) | (virtual_addr & (page_size - 1));
 }
 
-static void print_address(uint8_t *a) {
-    printf("0x%016lx", (uint64_t)a);
+static uint64_t get_actual_physical_addr(uintptr_t virtual_addr) {
+    uint64_t translated = m5_virttophys((uint64_t)virtual_addr);
+    if (translated != 0) {
+        return translated;
+    }
+
     if (!syscall_emulation) {
-        printf(", physical: 0x%016lx", get_physical_addr((intptr_t)a));
+        return get_host_physical_addr(virtual_addr);
+    }
+
+    return 0;
+}
+
+static uint64_t get_row_base_8k(uint64_t physical_addr) {
+    return physical_addr & ~((uint64_t)rowsize - 1);
+}
+
+static void register_trace_row(uint8_t *ptr) {
+    uint64_t physical_addr = get_actual_physical_addr((uintptr_t)ptr);
+    if (physical_addr != 0) {
+        ADD_TRACE_ROW_BASE(get_row_base_8k(physical_addr));
+    }
+}
+
+static void print_address(uint8_t *a) {
+    uint64_t physical_addr = get_actual_physical_addr((uintptr_t)a);
+
+    printf("virtual: 0x%016lx", (uint64_t)a);
+    if (physical_addr != 0) {
+        printf(", physical: 0x%016lx, row_base_8k: 0x%016lx",
+               physical_addr, get_row_base_8k(physical_addr));
+    } else {
+        printf(", physical: unavailable, row_base_8k: unavailable");
     }
     printf("\n");
 }
@@ -131,27 +179,56 @@ void rh_init(void) {
         else if (strcmp(special_row_sequence[i], "B_DCC0N") == 0) B_DCC0N = ptr;
         else if (strcmp(special_row_sequence[i], "B_DCC1") == 0) B_DCC1 = ptr;
         else if (strcmp(special_row_sequence[i], "B_DCC1N") == 0) B_DCC1N = ptr;
-        else if (strcmp(special_row_sequence[i], "TMR0") == 0) TMR0 = ptr;
-        else if (strcmp(special_row_sequence[i], "TMR1") == 0) TMR1 = ptr;
-        else if (strcmp(special_row_sequence[i], "TMR2") == 0) TMR2 = ptr;
+        else if (strcmp(special_row_sequence[i], "R0") == 0) R0 = ptr;
+        else if (strcmp(special_row_sequence[i], "R1") == 0) R1 = ptr;
+        else if (strcmp(special_row_sequence[i], "R2") == 0) R2 = ptr;
     }
 
+    uint64_t trace_base_addr = get_actual_physical_addr((uintptr_t)reg_file[0]);
+    if (trace_base_addr != 0) {
+        CLEAR_TRACE_ROWS();
+        SET_TRACE_BASE_ADDR(get_row_base_8k(trace_base_addr));
+
+        for (int i = 0; i < D_ROW_SIZE; i++) {
+            register_trace_row(reg_file[i]);
+        }
+
+        uint8_t *special_rows[] = {
+            C0, C1, T0, T1, T2, T3,
+            B_DCC0, B_DCC0N, B_DCC1, B_DCC1N,
+            R0, R1, R2
+        };
+        for (size_t i = 0; i < sizeof(special_rows) / sizeof(special_rows[0]); i++) {
+            register_trace_row(special_rows[i]);
+        }
+    }
+
+    print_address(reg_file[0]);
+    print_address(reg_file[1]);
+    print_address(reg_file[10]);
+    print_address(reg_file[12]);
     print_address(C0);
     print_address(C1);
     print_address(T0);
     print_address(T1);
     print_address(T2);
     print_address(T3);
-    print_address(TMR0);
-    print_address(TMR1);
-    print_address(TMR2);
+    print_address(B_DCC0);
+    print_address(B_DCC0N);
+    print_address(B_DCC1);
+    print_address(B_DCC1N);
+    print_address(R0);
+    print_address(R1);
+    print_address(R2);
 }
 
 void rh_reset_stats(void) {
+    reset_dram_contents();
     memset(regfile_access_count, 0, sizeof(regfile_access_count));
     memset(special_access_count, 0, sizeof(special_access_count));
     memset(regfile_bitflips, 0, sizeof(regfile_bitflips));
     memset(special_bitflips, 0, sizeof(special_bitflips));
+    memset(refresh_count, 0, sizeof(refresh_count));
     total_ap_count = 0;
     total_aap_count = 0;
     total_refresh_count = 0;
@@ -173,9 +250,9 @@ static uint8_t* get_ptr_from_label(const char* label_raw) {
     if (strcmp(label, "B_DCC0N") == 0) return B_DCC0N;
     if (strcmp(label, "B_DCC1") == 0) return B_DCC1;
     if (strcmp(label, "B_DCC1N") == 0) return B_DCC1N;
-    if (strcmp(label, "TMR0") == 0) return TMR0;
-    if (strcmp(label, "TMR1") == 0) return TMR1;
-    if (strcmp(label, "TMR2") == 0) return TMR2;
+    if (strcmp(label, "R0") == 0) return R0;
+    if (strcmp(label, "R1") == 0) return R1;
+    if (strcmp(label, "R2") == 0) return R2;
     
     return NULL;
 }
@@ -206,9 +283,9 @@ static int get_refresh_count_index(const char* label_raw) {
     if (strcmp(label, "B_DCC0N") == 0) return D_ROW_SIZE + 7;
     if (strcmp(label, "B_DCC1") == 0) return D_ROW_SIZE + 8;
     if (strcmp(label, "B_DCC1N") == 0) return D_ROW_SIZE + 9;
-    if (strcmp(label, "TMR0") == 0) return D_ROW_SIZE + 10;
-    if (strcmp(label, "TMR1") == 0) return D_ROW_SIZE + 11;
-    if (strcmp(label, "TMR2") == 0) return D_ROW_SIZE + 12;
+    if (strcmp(label, "R0") == 0) return D_ROW_SIZE + 10;
+    if (strcmp(label, "R1") == 0) return D_ROW_SIZE + 11;
+    if (strcmp(label, "R2") == 0) return D_ROW_SIZE + 12;
     
     return -1;
 }
@@ -230,9 +307,9 @@ static void print_row_name(uint8_t *ptr) {
     if (ptr == B_DCC0N) { printf("B_DCC0N "); return; }
     if (ptr == B_DCC1) { printf("B_DCC1 "); return; }
     if (ptr == B_DCC1N) { printf("B_DCC1N "); return; }
-    if (ptr == TMR0) { printf("TMR0 "); return; }
-    if (ptr == TMR1) { printf("TMR1 "); return; }
-    if (ptr == TMR2) { printf("TMR2 "); return; }
+    if (ptr == R0) { printf("R0 "); return; }
+    if (ptr == R1) { printf("R1 "); return; }
+    if (ptr == R2) { printf("R2 "); return; }
     
     printf("UNKNOWN ");
 }
@@ -251,9 +328,9 @@ static void increment_access_count(uint8_t *ptr) {
     if (ptr == B_DCC0N) { special_access_count[7]++; return; }
     if (ptr == B_DCC1) { special_access_count[8]++; return; }
     if (ptr == B_DCC1N) { special_access_count[9]++; return; }
-    if (ptr == TMR0) { special_access_count[10]++; return; }
-    if (ptr == TMR1) { special_access_count[11]++; return; }
-    if (ptr == TMR2) { special_access_count[12]++; return; }
+    if (ptr == R0) { special_access_count[10]++; return; }
+    if (ptr == R1) { special_access_count[11]++; return; }
+    if (ptr == R2) { special_access_count[12]++; return; }
 }
 
 void rh_hammer(const char *filename) {
@@ -282,17 +359,21 @@ void rh_hammer(const char *filename) {
         hammer_event_t current_event;
         memset(&current_event, 0, sizeof(hammer_event_t));
         current_event.num_rows = 0;
+        current_event.command_type = -1;  // -1 = unknown
 
         char *token = strtok(line, " ,\n\r\t");
         if (!token) continue; 
 
         if (strcmp(token, "AP") == 0) {
             total_ap_count++;
+            current_event.command_type = 0;  // AP
             token = strtok(NULL, " ,\n\r\t"); 
         } else if (strcmp(token, "AAP") == 0) {
             total_aap_count++;
+            current_event.command_type = 1;  // AAP
             token = strtok(NULL, " ,\n\r\t"); 
         } else if (strcmp(token, "REF") == 0) {
+            current_event.command_type = 2;  // REF
             // REF command: REF row1 row2 row3... => refresh multiple rows
             token = strtok(NULL, " ,\n\r\t");
             while (token) {
@@ -328,7 +409,7 @@ void rh_hammer(const char *filename) {
             token = strtok(NULL, " ,\n\r\t");
         }
 
-        if (current_event.num_rows > 0) {
+        if (current_event.num_rows > 0 && current_event.command_type >= 0) {
             if (event_count >= capacity) {
                 capacity *= 2; 
                 events = (hammer_event_t *)realloc(events, capacity * sizeof(hammer_event_t));
@@ -352,10 +433,16 @@ void rh_hammer(const char *filename) {
             if (safe_num_rows < 0) safe_num_rows = -safe_num_rows;
         }
 
-        if (safe_num_rows == 3) {
-            SET_MODE_COMRA;
-        } else {
+        // Set mode based on command type
+        if (events[i].command_type == 0) {
+            // AP trace
             SET_MODE_SIMRA;
+        } else if (events[i].command_type == 1) {
+            // AAP trace
+            SET_MODE_COMRA;
+        } else if (events[i].command_type == 2) {
+            // REF trace
+            SET_MODE_NORMAL;
         }
 
         for (int j = 0; j < safe_num_rows; j++) {
@@ -390,8 +477,17 @@ void scan(uint8_t* base) {
     int flips[5] = {0};
     for (unsigned i=0; i < rowsize / sizeof(uint64_t); i++) {
         if (b[i] != co) {
-            printf("0x%016lx: %d flips, mask: 0x%016lx", (uint64_t)b+i*sizeof(uint64_t), popcount(b[i] ^ co), b[i]^co);
-            printf(", physical: 0x%016lx", get_physical_addr((intptr_t)b+i));
+            uintptr_t virtual_addr = (uintptr_t)&b[i];
+            uint64_t physical_addr = get_actual_physical_addr(virtual_addr);
+
+            printf("0x%016lx: %d flips, mask: 0x%016lx",
+                   (uint64_t)virtual_addr, popcount(b[i] ^ co), b[i] ^ co);
+            if (physical_addr != 0) {
+                printf(", row_base_8k: 0x%016lx",
+                       get_row_base_8k(physical_addr));
+            } else {
+                printf(", physical: unavailable, row_base_8k: unavailable");
+            }
             printf("\n");
             flips[popcount(b[i] ^ co)]++;
         }
@@ -401,13 +497,13 @@ void scan(uint8_t* base) {
 
 void rh_collect_bitflips(void) {
     for (int i = 0; i < D_ROW_SIZE; i++) {
-        printf("scanning at row %d\n", i);
+        // printf("scanning at row %d\n", i);
         regfile_bitflips[i] = scan_int("", reg_file[i]);
     }
     struct { const char *name; uint8_t *ptr; } extras[] = {
         {"C0", C0}, {"C1", C1}, {"T0", T0}, {"T1", T1}, {"T2", T2}, {"T3", T3},
         {"B_DCC0", B_DCC0}, {"B_DCC0N", B_DCC0N}, {"B_DCC1", B_DCC1}, {"B_DCC1N", B_DCC1N},
-        {"TMR0", TMR0}, {"TMR1", TMR1}, {"TMR2", TMR2}
+        {"R0", R0}, {"R1", R1}, {"R2", R2}
     };
     for (int i = 0; i < SPECIAL_ROW_COUNT; i++) {
         special_bitflips[i] = scan_int(extras[i].name, extras[i].ptr);
@@ -415,8 +511,22 @@ void rh_collect_bitflips(void) {
 }
 
 void dump_final_info(const char *trace) {
+    char source_trace[1024];
+    strncpy(source_trace, trace, sizeof(source_trace) - 1);
+    source_trace[sizeof(source_trace) - 1] = '\0';
+
+    char *source_ext = strrchr(source_trace, '.');
+    if (source_ext) {
+        char *trr_suffix = source_ext - 4;
+        if (trr_suffix >= source_trace && strcmp(trr_suffix, "-trr") == 0) {
+            memmove(trr_suffix, source_ext, strlen(source_ext) + 1);
+        }
+    }
+
     const char *base = strrchr(trace, '/');
     base = base ? base + 1 : trace;
+    const char *verify_marker = "/progs/verify/";
+    const char *verify_dir = strstr(trace, verify_marker);
 
     char tmp[256];
     strncpy(tmp, base, sizeof(tmp) - 1);
@@ -425,20 +535,41 @@ void dump_final_info(const char *trace) {
     char *ext = strrchr(tmp, '.');
     if (ext) *ext = '\0'; 
 
-    char outname[512];
-    snprintf(outname, sizeof(outname), "/home/daweix3/hammulator/progs/verify/report/%s-final-report.txt", tmp);
+    char report_dir[512];
+    if (verify_dir) {
+        size_t prefix_len = (size_t)(verify_dir - trace) + strlen(verify_marker);
+        if (prefix_len >= sizeof(report_dir)) {
+            fprintf(stderr, "report directory path is too long: %s\n", trace);
+            return;
+        }
+
+        memcpy(report_dir, trace, prefix_len);
+        report_dir[prefix_len] = '\0';
+        strncat(report_dir, "report", sizeof(report_dir) - strlen(report_dir) - 1);
+    } else {
+        snprintf(report_dir, sizeof(report_dir), "report");
+    }
+
+    char outname[768];
+    if (snprintf(outname, sizeof(outname), "%s/%s-final-report.txt", report_dir, tmp) >= (int)sizeof(outname)) {
+        fprintf(stderr, "report file path is too long: %s/%s-final-report.txt\n", report_dir, tmp);
+        return;
+    }
 
     FILE *fp = fopen(outname, "w");
     if (!fp) { perror("fopen final_report"); return; }
 
     uint64_t total_access_count = 0;
+    uint64_t total_bitflip_errors = 0;
 
     for (int i = 0; i < D_ROW_SIZE; i++) {
         total_access_count += regfile_access_count[i];
+        total_bitflip_errors += regfile_bitflips[i];
     }
 
     for (int i = 0; i < SPECIAL_ROW_COUNT; i++) {
         total_access_count += special_access_count[i];
+        total_bitflip_errors += special_bitflips[i];
     }
 
     uint64_t total_ap_time_ns = total_ap_count * tAP;   
@@ -447,8 +578,9 @@ void dump_final_info(const char *trace) {
     uint64_t total_pim_time_ns = total_ap_time_ns + total_aap_time_ns;
 
     fprintf(fp, "================== FINAL RH REPORT ==================\n");
-    fprintf(fp, "Source trace: %s\n", trace);
+    fprintf(fp, "Source trace: %s\n", source_trace);
     fprintf(fp, "Total Access Count (All Rows): %lu\n", total_access_count); 
+    fprintf(fp, "Total Bitflip Errors (All Rows): %lu\n", total_bitflip_errors);
     fprintf(fp, "Total Refresh Count: %lu\n\n", total_refresh_count); 
 
     fprintf(fp, "--------------- PIM OPERATIONS & TIME ---------------\n");
@@ -458,7 +590,7 @@ void dump_final_info(const char *trace) {
     fprintf(fp, "-----------------------------------------------------\n");
     fprintf(fp, "Total Est. PIM Execution Time: %lu ns (%.6f ms)\n", 
             total_pim_time_ns, (double)total_pim_time_ns / 1000000.0);
-    fprintf(fp, "REF Est. Overhead Percentage: %lu \n\n", (double)total_refresh_time_ns / total_pim_time_ns);
+    fprintf(fp, "REF Est. Overhead Percentage: %f \n\n", (double)total_refresh_time_ns / total_pim_time_ns);
 
     fprintf(fp, "--------------- REG_FILE ROWS (%d rows) ---------------\n", D_ROW_SIZE);
     
@@ -471,7 +603,7 @@ void dump_final_info(const char *trace) {
     const char *names[SPECIAL_ROW_COUNT] = {
         "C0", "C1", "T0", "T1", "T2", "T3",
         "B_DCC0", "B_DCC0N", "B_DCC1", "B_DCC1N",
-        "TMR0", "TMR1", "TMR2"
+        "R0", "R1", "R2"
     };
     for (int i = 0; i < SPECIAL_ROW_COUNT; i++) {
         fprintf(fp, "%-8s | Accesses: %10lu | Bitflips: %d | Refresh: %d\n",
