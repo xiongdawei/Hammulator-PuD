@@ -49,6 +49,7 @@
 #include <cerrno>
 #include <fstream>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "base/debug.hh"
@@ -72,6 +73,8 @@
 #include "sim/system.hh"
 
 uint64_t global_rowhammer_attack_mode = 0;
+uint64_t global_rowhammer_trace_base_addr = 0;
+std::unordered_set<uint64_t> global_rowhammer_trace_row_bases;
 
 namespace gem5
 {
@@ -507,6 +510,19 @@ void
 workbegin(ThreadContext *tc, uint64_t workid, uint64_t threadid)
 {
     DPRINTF(PseudoInst, "pseudo_inst::workbegin(%i, %i)\n", workid, threadid);
+
+    if (workid == 4) {
+        global_rowhammer_trace_base_addr = threadid;
+        return;
+    }
+    if (workid == 5) {
+        global_rowhammer_trace_row_bases.clear();
+        return;
+    }
+    if (workid == 6) {
+        global_rowhammer_trace_row_bases.insert(threadid);
+        return;
+    }
 
     global_rowhammer_attack_mode = workid;
 

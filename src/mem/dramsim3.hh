@@ -51,12 +51,15 @@
 #include <set>
 #include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "mem/abstract_mem.hh"
 #include "mem/dramsim3_wrapper.hh"
 #include "mem/qport.hh"
 
 extern uint64_t global_rowhammer_attack_mode;
+extern uint64_t global_rowhammer_trace_base_addr;
+extern std::unordered_set<uint64_t> global_rowhammer_trace_row_bases;
 
 namespace gem5
 {
