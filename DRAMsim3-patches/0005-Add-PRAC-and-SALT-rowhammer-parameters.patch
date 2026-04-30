@@ -1,0 +1,235 @@
+From 11cbd854d171e89bde83ef4f614474aab754e2d7 Mon Sep 17 00:00:00 2001
+From: David Xiong <daweix3@hermit-03.csl.illinois.edu>
+Date: Thu, 30 Apr 2026 13:45:22 -0500
+Subject: [PATCH] Add PRAC and SALT rowhammer parameters
+
+---
+ CMakeLists.txt       |   2 +-
+ src/configuration.cc | 109 +++++++++++++++++++++++++++++++++++++++++++
+ src/configuration.h  |  36 ++++++++++++++
+ src/dramsim3.h       |   4 ++
+ 4 files changed, 150 insertions(+), 1 deletion(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index eaa40bf..827be59 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1,4 +1,4 @@
+-cmake_minimum_required(VERSION 3.0.0)
++cmake_minimum_required(VERSION 3.5)
+ project(dramsim3)
+ 
+ set(default_build_type "Release")
+diff --git a/src/configuration.cc b/src/configuration.cc
+index 9e434f8..254b00d 100644
+--- a/src/configuration.cc
++++ b/src/configuration.cc
+@@ -1,4 +1,5 @@
+ #include "configuration.h"
++#include <algorithm>
+ #include <cassert>
+ #include <stdio.h>
+ #include <vector>
+@@ -203,7 +204,10 @@ void Config::InitRowhammerParams() {
+     inc_dist_5 = reader.GetReal("rowhammer", "inc_dist_5", 0.1);   // 0.03/0.3
+     hc_first = reader.GetReal("rowhammer", "HC_first", 300.0);
+     hc_last = reader.GetReal("rowhammer", "HC_last", 300.0);
++    SiMRA_weight = reader.GetReal("rowhammer", "SiMRA_weight", 158.0);
++    CoMRA_weight = reader.GetReal("rowhammer", "CoMRA_weight", 14.0);
+     hc_last_bitflip_rate = reader.GetReal("rowhammer", "hc_last_bitflip_rate", 1.0/1000);
++    non_linear_degree = reader.GetReal("rowhammer", "non_linear_degree", 3.0);
+     proba_1_bit_flipped = reader.GetReal("rowhammer", "proba_1_bit_flipped", 1.0);
+     proba_2_bit_flipped = reader.GetReal("rowhammer", "proba_2_bit_flipped", 0.0);
+     proba_3_bit_flipped = reader.GetReal("rowhammer", "proba_3_bit_flipped", 0.0);
+@@ -212,11 +216,116 @@ void Config::InitRowhammerParams() {
+         std::cerr << "probabilities do not sum up to one"  << std::endl;
+         exit(1);
+     }
++    if (non_linear_degree <= 0.0) {
++        non_linear_degree = 1.0;
++    }
+     flip_mask = reader.GetReal("rowhammer", "flip_mask", 0);
++    // Accept the explicit PRAC+ABO knob first, while keeping legacy aliases.
++    prac_abo_enabled = reader.GetBoolean(
++        "rowhammer", "prac_abo_enabled",
++        reader.GetBoolean(
++            "rowhammer", "prac_enabled",
++            reader.GetBoolean("rowhammer", "rpac_enabled", false)));
++    prac_threshold = reader.GetInteger(
++        "rowhammer", "prac_threshold",
++        reader.GetInteger("rowhammer", "rpac_threshold", 1000));
++    prac_blast_radius = reader.GetInteger(
++        "rowhammer", "prac_blast_radius",
++        reader.GetInteger("rowhammer", "rpac_blast_radius", 2));
++    if (prac_threshold <= 0) {
++        prac_threshold = 1000;
++    }
++    if (prac_blast_radius <= 0) {
++        prac_blast_radius = 2;
++    }
+     para_proba = reader.GetReal("rowhammer", "para_proba", 0.05);
+     para_enabled = reader.GetBoolean("rowhammer", "para_enabled", false);
+     trr_threshold = reader.GetInteger("rowhammer", "trr_threshold", 200);
+     trr_enabled = reader.GetBoolean("rowhammer", "trr_enabled", false);
++
++    // temperature 
++    temperature = reader.GetReal("rowhammer", "temperature", 50.0);
++    baseline_temperature = reader.GetReal("rowhammer", "baseline_temperature", 50.0);
++    temperature_scale_factor = reader.GetReal("rowhammer", "temperature_scale_factor", 0.0667);
++
++    // tAggOn 
++    tRAS_baseline_ticks = reader.GetInteger("rowhammer", "tRAS_baseline_ticks", 36); 
++    tAggOn_max_ticks = reader.GetInteger("rowhammer", "tAggOn_max_ticks", 70200); 
++    tAggOn = reader.GetInteger("rowhammer", "tAggOn", 36);   
++    simra_taggon_max_penalty = reader.GetReal("rowhammer", "simra_taggon_max_penalty", 270.0); 
++    normal_taggon_max_penalty = reader.GetReal("rowhammer", "normal_taggon_max_penalty", 3.0);
++
++    // Spatial Variation 
++    spatial_variation_enabled = reader.GetBoolean("rowhammer", "spatial_variation_enabled", false);
++    spatial_variation_stddev = reader.GetInteger("rowhammer", "spatial_variation_stddev", 0);
++    spatial_variation_seed = reader.GetInteger(
++        "rowhammer", "spatial_variation_seed",
++        reader.GetInteger("rowhammer", "spaital_variation_seed", 0));
++    spatial_q01_multiplier = reader.GetReal(
++        "rowhammer", "spatial_q01_multiplier", 1.6);
++    spatial_q05_multiplier = reader.GetReal(
++        "rowhammer", "spatial_q05_multiplier", 2.0);
++    spatial_q10_multiplier = reader.GetReal(
++        "rowhammer", "spatial_q10_multiplier", 2.2);
++    spatial_q100_multiplier = reader.GetReal(
++        "rowhammer", "spatial_q100_multiplier", 3.0);
++
++    spatial_q01_multiplier = std::max(1.0, spatial_q01_multiplier);
++    spatial_q05_multiplier =
++        std::max(spatial_q01_multiplier, spatial_q05_multiplier);
++    spatial_q10_multiplier =
++        std::max(spatial_q05_multiplier, spatial_q10_multiplier);
++    spatial_q100_multiplier =
++        std::max(spatial_q10_multiplier, spatial_q100_multiplier);
++
++    salt_enabled = reader.GetBoolean("rowhammer", "salt_enabled", false);
++    salt_coord_refresh =
++        reader.GetBoolean("rowhammer", "salt_coord_refresh", false);
++    salt_row_striping =
++        reader.GetBoolean("rowhammer", "salt_row_striping", true);
++    salt_bundle_rows = reader.GetInteger("rowhammer", "salt_bundle_rows", 7);
++    salt_rows_per_subarray =
++        reader.GetInteger("rowhammer", "salt_rows_per_subarray", 512);
++    salt_subarrays = reader.GetInteger("rowhammer", "salt_subarrays", 0);
++    salt_target_max_activations = reader.GetInteger(
++        "rowhammer", "salt_target_max_activations",
++        static_cast<int>(hc_first));
++
++    if (salt_bundle_rows <= 0) {
++        salt_bundle_rows = 7;
++    }
++
++    if (salt_subarrays <= 0 && salt_rows_per_subarray > 0) {
++        salt_subarrays = rows / salt_rows_per_subarray;
++    } else if (salt_rows_per_subarray <= 0 && salt_subarrays > 0) {
++        salt_rows_per_subarray = rows / salt_subarrays;
++    }
++
++    if (salt_subarrays <= 0 || salt_rows_per_subarray <= 0 ||
++        (salt_subarrays * salt_rows_per_subarray) != rows) {
++        if (salt_enabled) {
++            std::cerr << "Invalid SALT subarray geometry: rows=" << rows
++                      << " subarrays=" << salt_subarrays
++                      << " rows_per_subarray=" << salt_rows_per_subarray
++                      << std::endl;
++            AbruptExit(__FILE__, __LINE__);
++        } else {
++            salt_subarrays = 1;
++            salt_rows_per_subarray = rows;
++        }
++    }
++
++    int salt_bundles =
++        (salt_rows_per_subarray + salt_bundle_rows - 1) / salt_bundle_rows;
++    salt_apm = reader.GetInteger("rowhammer", "salt_apm", 0);
++    if (salt_apm <= 0) {
++        salt_apm = std::max(
++            1, (salt_target_max_activations - 25) / (salt_bundles + 1));
++    }
++    salt_ath = reader.GetInteger("rowhammer", "salt_ath", 0);
++    if (salt_ath <= 0) {
++        salt_ath = 2 * salt_apm;
++    }
+     return;
+ }
+ 
+diff --git a/src/configuration.h b/src/configuration.h
+index 657b3e9..9679e08 100644
+--- a/src/configuration.h
++++ b/src/configuration.h
+@@ -111,16 +111,52 @@ class Config {
+     double inc_dist_5;
+     double hc_first;
+     double hc_last;
++    double SiMRA_weight;
++    double CoMRA_weight;
+     double hc_last_bitflip_rate;
++    double non_linear_degree;
+     double proba_1_bit_flipped;
+     double proba_2_bit_flipped;
+     double proba_3_bit_flipped;
+     double proba_4_bit_flipped;
+     uint64_t flip_mask;
++    bool prac_abo_enabled;
++    int prac_threshold;
++    int prac_blast_radius;
+     bool para_enabled;
+     double para_proba;
+     bool trr_enabled;
+     int trr_threshold;
++    bool salt_enabled;
++    bool salt_coord_refresh;
++    bool salt_row_striping;
++    int salt_bundle_rows;
++    int salt_rows_per_subarray;
++    int salt_subarrays;
++    int salt_target_max_activations;
++    int salt_apm;
++    int salt_ath;
++
++    // Temperature Related parameters
++    double temperature;
++    double baseline_temperature;
++    double temperature_scale_factor;
++
++    // tAggOn
++    int tRAS_baseline_ticks;
++    int tAggOn_max_ticks;
++    int tAggOn;
++    double simra_taggon_max_penalty;
++    double normal_taggon_max_penalty;
++
++    // Spatial Variation parameters
++    bool spatial_variation_enabled;
++    int spatial_variation_stddev;
++    int spatial_variation_seed;
++    double spatial_q01_multiplier;
++    double spatial_q05_multiplier;
++    double spatial_q10_multiplier;
++    double spatial_q100_multiplier;
+ 
+     // pre calculated power parameters
+     double act_energy_inc;
+diff --git a/src/dramsim3.h b/src/dramsim3.h
+index 02b32d2..f59fef4 100644
+--- a/src/dramsim3.h
++++ b/src/dramsim3.h
+@@ -30,6 +30,10 @@ class MemorySystem {
+ 
+     bool WillAcceptTransaction(uint64_t hex_addr, bool is_write) const;
+     bool AddTransaction(uint64_t hex_addr, bool is_write);
++
++    private:
++    std::map<int, uint64_t> last_acc_tick;
++    std::map<int, uint64_t> last_acc_row;
+ };
+ 
+ MemorySystem* GetMemorySystem(const std::string &config_file, const std::string &output_dir,
+-- 
+2.50.1
+

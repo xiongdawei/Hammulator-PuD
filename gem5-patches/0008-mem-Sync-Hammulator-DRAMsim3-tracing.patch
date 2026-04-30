@@ -1,0 +1,430 @@
+From a4ed27015b4f5521652b527940109923ab239612 Mon Sep 17 00:00:00 2001
+From: David Xiong <daweix3@hermit-03.csl.illinois.edu>
+Date: Thu, 30 Apr 2026 13:45:13 -0500
+Subject: [PATCH] mem: Sync Hammulator DRAMsim3 tracing
+
+Change-Id: I47371b1067e390104e4314cc78f1ab56d75fcbb7
+---
+ src/mem/dramsim3.cc    | 253 +++++++++++++++++++++++++++++++++--------
+ src/mem/dramsim3.hh    |   3 +
+ src/sim/pseudo_inst.cc |  16 +++
+ 3 files changed, 227 insertions(+), 45 deletions(-)
+
+diff --git a/src/mem/dramsim3.cc b/src/mem/dramsim3.cc
+index 5c096b7c5f..006b4bc1de 100644
+--- a/src/mem/dramsim3.cc
++++ b/src/mem/dramsim3.cc
+@@ -41,6 +41,7 @@
+ #include <cmath>
+ #include <cstdint>
+ #include <random>
++#include <string>
+ #include <unordered_map>
+ 
+ #include "base/callback.hh"
+@@ -56,6 +57,73 @@ namespace gem5
+ namespace memory
+ {
+ 
++namespace
++{
++
++constexpr int kTraceDataRows = 300;
++constexpr const char *kSpecialTraceRows[] = {
++    "C0", "C1",
++    "T0", "T1", "T2", "T3",
++    "B_DCC0", "B_DCC0N", "B_DCC1", "B_DCC1N",
++    "R0", "R1", "R2"
++};
++
++std::string
++traceRowLabel(int traceRow)
++{
++    if (traceRow < kTraceDataRows) {
++        return std::to_string(traceRow);
++    }
++
++    const int specialIdx = traceRow - kTraceDataRows;
++    if (specialIdx >= 0 &&
++        specialIdx < static_cast<int>(
++            sizeof(kSpecialTraceRows) / sizeof(kSpecialTraceRows[0]))) {
++        return kSpecialTraceRows[specialIdx];
++    }
++
++    return std::to_string(traceRow);
++}
++
++bool
++getTraceRow(dramsim3::Config *config, int channel, int rank, int bankgroup,
++            int bank, int row, int &traceRow)
++{
++    const uint64_t rowBase = config->ReverseAddressMapping(
++        channel, rank, bankgroup, bank, row, 0);
++    if (global_rowhammer_trace_row_bases.find(rowBase) ==
++        global_rowhammer_trace_row_bases.end()) {
++        return false;
++    }
++
++    if (global_rowhammer_trace_base_addr == 0) {
++        return false;
++    }
++
++    const auto base = config->AddressMapping(global_rowhammer_trace_base_addr);
++    traceRow = row - base.row;
++    return true;
++}
++
++void
++logAggressorRow(dramsim3::Config *config, const char *accessType,
++                const char *sourceTag, const char *modeTag, uint64_t addr,
++                int channel, int rank, int bankgroup, int bank, int row)
++{
++    const uint64_t rowBase = config->ReverseAddressMapping(
++        channel, rank, bankgroup, bank, row, 0);
++    int traceRow = 0;
++    if (!getTraceRow(config, channel, rank, bankgroup, bank, row, traceRow)) {
++        return;
++    }
++    const std::string rowLabel = traceRowLabel(traceRow);
++    DPRINTF(PuDHammer,
++            "Row %s, physical address 0x%016lx\n",
++            rowLabel.c_str(), rowBase);
++}
++
++} // namespace
++
+ DRAMsim3::DRAMsim3(const Params &p) :
+     AbstractMemory(p),
+     port(name() + ".port", *this),
+@@ -701,9 +769,10 @@ void DRAMsim3::readComplete(unsigned id, uint64_t addr, bool bufferhit)
+     current_attack_mode =
+         static_cast<AttackMode>(global_rowhammer_attack_mode);
+ 
+-    if (current_attack_mode != NORMAL) {
+-       DPRINTF(PuDHammer, "Read to address %lld complete\n", addr);
+-    }
++    // if (current_attack_mode != NORMAL) {
++    //    DPRINTF(PuDHammer, "Read to address %lld complete\n", addr);
++    // }
++
+ 
+     if (current_attack_mode != last_recorded_mode) {
+         switch (current_attack_mode) {
+@@ -732,6 +801,39 @@ void DRAMsim3::readComplete(unsigned id, uint64_t addr, bool bufferhit)
+     int bankgroup = a.bankgroup;
+     int bank = a.bank;
+     int row = a.row;
++    int aggressorTraceRow = 0;
++    const bool isTraceAggressor =
++        getTraceRow(config, channel, rank, bankgroup, bank, row,
++                    aggressorTraceRow);
++    const char *sourceTag = "system";
++    const char *modeTag = "NORMAL";
++    switch (current_attack_mode) {
++      case SiMRA:
++        modeTag = "SiMRA";
++        if (isTraceAggressor) {
++            sourceTag = "trace";
++        }
++        break;
++      case CoMRA:
++        modeTag = "CoMRA";
++        if (isTraceAggressor) {
++            sourceTag = "trace";
++        }
++        break;
++      case RESET_BYPASS:
++        sourceTag = "reset";
++        modeTag = "RESET_BYPASS";
++        break;
++      case NORMAL:
++      default:
++        break;
++    }
++
++    if (!bufferhit && isTraceAggressor &&
++        (current_attack_mode == SiMRA || current_attack_mode == CoMRA)) {
++        logAggressorRow(config, "Read", sourceTag, modeTag, addr, channel,
++                        rank, bankgroup, bank, row);
++    }
+ 
+     // int bank_id = (channel << 12) | (rank << 8 ) | (bankgroup << 4) | bank;
+ 
+@@ -757,18 +859,26 @@ void DRAMsim3::readComplete(unsigned id, uint64_t addr, bool bufferhit)
+     // perform the actual memory access
+     accessAndRespond(pkt);
+ 
++    if (!isTraceAggressor) {
++        // DPRINTF(PuDHammer,
++        //         "[source=%s mode=%s] Access outside registered trace rows, "
++        //         "skipping hammer count for addr 0x%016lx (dram_row %d)\n",
++        //         sourceTag, modeTag, addr, row);
++        return;
++    }
++
+     bool triggerSalt = noteActivation(channel, rank, bankgroup, bank, row,
+                                       bufferhit);
+     bool triggerPrac = notePracActivation(channel, rank, bankgroup, bank, row,
+                                           bufferhit);
+ 
+     // no rowhammer effects when rowbuffer hit
+-    if (bufferhit) {
+-        DPRINTF(PuDHammer,
+-                "Row buffer hit for address %lld, skipping rowhammer logic\n",
+-                addr);
+-        return;
+-    }
++    // if (bufferhit) {
++    //     DPRINTF(PuDHammer,
++    //             "Row buffer hit for address %lld, skipping rowhammer "
++    //             "logic\n", addr);
++    //     return;
++    // }
+ 
+     for (int dist = -5; dist <= 5; dist++) {
+         if (dist == 0 || row + dist < 0 || row + dist >= config->rows) {
+@@ -833,18 +943,30 @@ void DRAMsim3::readComplete(unsigned id, uint64_t addr, bool bufferhit)
+ 
+         uint64_t flipped_row_base = config->ReverseAddressMapping(
+             channel, rank, bankgroup, bank, row + dist, 0);
++        const uint64_t flipped_phys_addr =
++            config->ReverseAddressMapping(channel, rank, bankgroup, bank,
++                                          row + dist, a.column) +
++            (addr & ((1ULL << config->shift_bits) - 1));
+         if (hammer_count.find(flipped_row_base) == hammer_count.end()) {
+             hammer_count.insert(std::make_pair(flipped_row_base, add));
+-            // Don't check against threshold here since we should be way below
+-            continue;
++        } else {
++            hammer_count[flipped_row_base] += add;
+         }
+-
+-        hammer_count[flipped_row_base] += add;
+         //DPRINTF(PuDHammer, "This is from distance %d\n", dist);
+-        DPRINTF(PuDHammer,
+-                "Incremented hammer count for row 0x%016lx by %.4f, new "
+-                "count: %.4f\n",
+-                flipped_row_base, add, hammer_count[flipped_row_base]);
++        int flippedTraceRow = 0;
++        if (getTraceRow(config, channel, rank, bankgroup, bank, row + dist,
++                        flippedTraceRow)) {
++            const std::string rowLabel = traceRowLabel(flippedTraceRow);
++            DPRINTF(PuDHammer,
++                    "Row %s, physical address 0x%016lx, increment %.4f, "
++                    "hammer count %.4f\n",
++                    rowLabel.c_str(), flipped_phys_addr, add,
++                    hammer_count[flipped_row_base]);
++        } else {
++            // DPRINTF(PuDHammer,
++            //         "Row base 0x%016lx, physical address 0x%016lx\n",
++            //         flipped_row_base, flipped_phys_addr);
++        }
+ 
+         // double row_flip_rate = config->hc_last_bitflip_rate *
+         //     (hammer_count[flipped_row_base] - config->hc_first) /
+@@ -927,9 +1049,18 @@ void DRAMsim3::readComplete(unsigned id, uint64_t addr, bool bufferhit)
+ 
+             // flip with mask
+             *(uint64_t*)this->toHostAddr(quad) ^= mask;
+-            DPRINTF(PuDHammer,
+-                    "Bit flip at address 0x%016lx, mask: 0x%016lx\n",
+-                    quad, mask);
++            int bitflipTraceRow = 0;
++            if (getTraceRow(config, channel, rank, bankgroup, bank, row + dist,
++                            bitflipTraceRow)) {
++                const std::string rowLabel = traceRowLabel(bitflipTraceRow);
++                DPRINTF(PuDHammer,
++                        "Bit flip at row %s, address 0x%016lx, mask: "
++                        "0x%016lx\n", rowLabel.c_str(), quad, mask);
++            } else {
++                DPRINTF(PuDHammer,
++                        "Bit flip at address 0x%016lx, mask: 0x%016lx\n",
++                        quad, mask);
++            }
+         }
+     }
+ 
+@@ -971,6 +1102,37 @@ DRAMsim3::writeComplete(unsigned id, uint64_t addr, bool bufferhit)
+         signalDrainDone();
+ 
+     auto a = config->AddressMapping(addr);
++    int aggressorTraceRow = 0;
++    const bool isTraceAggressor =
++        getTraceRow(config, a.channel, a.rank, a.bankgroup, a.bank, a.row,
++                    aggressorTraceRow);
++    const char *sourceTag = "system";
++    const char *modeTag = "NORMAL";
++    switch (current_attack_mode) {
++      case SiMRA:
++        modeTag = "SiMRA";
++        if (isTraceAggressor) {
++            sourceTag = "trace";
++        }
++        break;
++      case CoMRA:
++        modeTag = "CoMRA";
++        if (isTraceAggressor) {
++            sourceTag = "trace";
++        }
++        break;
++      case RESET_BYPASS:
++        sourceTag = "reset";
++        modeTag = "RESET_BYPASS";
++        break;
++      case NORMAL:
++      default:
++        break;
++    }
++    // if (!bufferhit) {
++    //     logAggressorRow(config, "Write", sourceTag, modeTag, addr,
++    //                     a.channel, a.rank, a.bankgroup, a.bank, a.row);
++    // }
+     if (current_attack_mode == RESET_BYPASS) {
+         uint64_t row_base = config->ReverseAddressMapping(
+             a.channel, a.rank, a.bankgroup, a.bank, a.row, 0);
+@@ -1069,55 +1231,56 @@ DRAMsim3::refreshComplete(unsigned id, int channel, int bankgroup, int bank)
+ 
+ void DRAMsim3::printMitigationStats()
+ {
+-    DPRINTF(DRAMsim3, "=== Rowhammer Mitigation Statistics ===\n");
+-    DPRINTF(DRAMsim3, "SALT Enabled: %s\n",
++    DPRINTF(PuDHammer, "=== Rowhammer Mitigation Statistics ===\n");
++    DPRINTF(PuDHammer, "SALT Enabled: %s\n",
+             config->salt_enabled ? "yes" : "no");
+     if (config->salt_enabled) {
+-        DPRINTF(DRAMsim3,
++        DPRINTF(PuDHammer,
+                 "SALT Mode: %s (APM=%d ATH=%d subarrays=%d "
+                 "rows/subarray=%d bundle=%d)\n",
+                 config->salt_coord_refresh ? "SALT-C" : "SALT",
+                 config->salt_apm, config->salt_ath, config->salt_subarrays,
+                 config->salt_rows_per_subarray, config->salt_bundle_rows);
+-        DPRINTF(DRAMsim3, "SALT ABOs: %lu\n", saltAbos);
+-        DPRINTF(DRAMsim3, "SALT ABO Bank Mitigations: %lu\n",
++        DPRINTF(PuDHammer, "SALT ABOs: %lu\n", saltAbos);
++        DPRINTF(PuDHammer, "SALT ABO Bank Mitigations: %lu\n",
+                 saltAboMitigations);
+-        DPRINTF(DRAMsim3, "SALT REF Mitigations: %lu\n", saltRefMitigations);
+-        DPRINTF(DRAMsim3, "SALT Rows Refreshed: %lu\n", saltRowsRefreshed);
+-        DPRINTF(DRAMsim3, "\n");
++        DPRINTF(PuDHammer, "SALT REF Mitigations: %lu\n", saltRefMitigations);
++        DPRINTF(PuDHammer, "SALT Rows Refreshed: %lu\n", saltRowsRefreshed);
++        DPRINTF(PuDHammer, "\n");
+     }
+-    DPRINTF(DRAMsim3, "PRAC_ABO Enabled: %s\n",
++    DPRINTF(PuDHammer, "PRAC_ABO Enabled: %s\n",
+             config->prac_abo_enabled ? "yes" : "no");
+     if (config->prac_abo_enabled) {
+-        DPRINTF(DRAMsim3, "PRAC Threshold: %d\n", config->prac_threshold);
+-        DPRINTF(DRAMsim3, "PRAC Blast Radius: %d\n",
++        DPRINTF(PuDHammer, "PRAC Threshold: %d\n", config->prac_threshold);
++        DPRINTF(PuDHammer, "PRAC Blast Radius: %d\n",
+                 config->prac_blast_radius);
+-        DPRINTF(DRAMsim3, "PRAC ABOs: %lu\n", prac_abos);
+-        DPRINTF(DRAMsim3, "PRAC Prevented Bit Flips: %lu\n",
++        DPRINTF(PuDHammer, "PRAC ABOs: %lu\n", prac_abos);
++        DPRINTF(PuDHammer, "PRAC Prevented Bit Flips: %lu\n",
+                 prac_preventions);
+-        DPRINTF(DRAMsim3, "\n");
++        DPRINTF(PuDHammer, "\n");
+     }
+-    DPRINTF(DRAMsim3, "TRR Calls: %lu\n", trr_calls);
+-    DPRINTF(DRAMsim3, "TRR Prevented Bit Flips: %lu\n", trr_preventions);
++    DPRINTF(PuDHammer, "TRR Calls: %lu\n", trr_calls);
++    DPRINTF(PuDHammer, "TRR Prevented Bit Flips: %lu\n", trr_preventions);
+     if (trr_calls > 0) {
+-        DPRINTF(DRAMsim3, "TRR Prevention Rate: %.2f%% (prevented %lu/%lu)\n",
++        DPRINTF(PuDHammer, "TRR Prevention Rate: %.2f%% (prevented %lu/%lu)\n",
+                 (double)trr_preventions / trr_calls * 100,
+                 trr_preventions, trr_calls);
+     }
+-    DPRINTF(DRAMsim3, "\n");
+-    DPRINTF(DRAMsim3, "PARA Calls: %lu\n", para_calls);
+-    DPRINTF(DRAMsim3, "PARA Prevented Bit Flips: %lu\n", para_preventions);
++    DPRINTF(PuDHammer, "\n");
++    DPRINTF(PuDHammer, "PARA Calls: %lu\n", para_calls);
++    DPRINTF(PuDHammer, "PARA Prevented Bit Flips: %lu\n", para_preventions);
+     if (para_calls > 0) {
+-        DPRINTF(DRAMsim3, "PARA Prevention Rate: %.2f%% (prevented %lu/%lu)\n",
++        DPRINTF(PuDHammer,
++                "PARA Prevention Rate: %.2f%% (prevented %lu/%lu)\n",
+                 (double)para_preventions / para_calls * 100,
+                 para_preventions, para_calls);
+     }
+-    DPRINTF(DRAMsim3, "\n");
+-    DPRINTF(DRAMsim3, "Total Mitigation Activations: %lu\n",
++    DPRINTF(PuDHammer, "\n");
++    DPRINTF(PuDHammer, "Total Mitigation Activations: %lu\n",
+             prac_abos + trr_calls + para_calls);
+-    DPRINTF(DRAMsim3, "Total Prevented Bit Flips: %lu\n",
++    DPRINTF(PuDHammer, "Total Prevented Bit Flips: %lu\n",
+             prac_preventions + trr_preventions + para_preventions);
+-    DPRINTF(DRAMsim3, "=========================================\n");
++    DPRINTF(PuDHammer, "=========================================\n");
+ }
+ 
+ Port&
+diff --git a/src/mem/dramsim3.hh b/src/mem/dramsim3.hh
+index 2e422616bf..d5dd2ff2ff 100644
+--- a/src/mem/dramsim3.hh
++++ b/src/mem/dramsim3.hh
+@@ -51,12 +51,15 @@
+ #include <set>
+ #include <tuple>
+ #include <unordered_map>
++#include <unordered_set>
+ 
+ #include "mem/abstract_mem.hh"
+ #include "mem/dramsim3_wrapper.hh"
+ #include "mem/qport.hh"
+ 
+ extern uint64_t global_rowhammer_attack_mode;
++extern uint64_t global_rowhammer_trace_base_addr;
++extern std::unordered_set<uint64_t> global_rowhammer_trace_row_bases;
+ 
+ namespace gem5
+ {
+diff --git a/src/sim/pseudo_inst.cc b/src/sim/pseudo_inst.cc
+index 594ed60e8b..a5a4475429 100644
+--- a/src/sim/pseudo_inst.cc
++++ b/src/sim/pseudo_inst.cc
+@@ -49,6 +49,7 @@
+ #include <cerrno>
+ #include <fstream>
+ #include <string>
++#include <unordered_set>
+ #include <vector>
+ 
+ #include "base/debug.hh"
+@@ -72,6 +73,8 @@
+ #include "sim/system.hh"
+ 
+ uint64_t global_rowhammer_attack_mode = 0;
++uint64_t global_rowhammer_trace_base_addr = 0;
++std::unordered_set<uint64_t> global_rowhammer_trace_row_bases;
+ 
+ namespace gem5
+ {
+@@ -508,6 +511,19 @@ workbegin(ThreadContext *tc, uint64_t workid, uint64_t threadid)
+ {
+     DPRINTF(PseudoInst, "pseudo_inst::workbegin(%i, %i)\n", workid, threadid);
+ 
++    if (workid == 4) {
++        global_rowhammer_trace_base_addr = threadid;
++        return;
++    }
++    if (workid == 5) {
++        global_rowhammer_trace_row_bases.clear();
++        return;
++    }
++    if (workid == 6) {
++        global_rowhammer_trace_row_bases.insert(threadid);
++        return;
++    }
++
+     global_rowhammer_attack_mode = workid;
+ 
+     System *sys = tc->getSystemPtr();
+-- 
+2.50.1
+
