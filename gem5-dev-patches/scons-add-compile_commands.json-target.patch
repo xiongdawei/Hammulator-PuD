@@ -1,8 +1,9 @@
-From 4090290af7bb7e94de1c87a037bd59134f6f5c9c Mon Sep 17 00:00:00 2001
-From: Fabian Thomas <fabian@fabianthomas.de>
-Date: Fri, 16 Jun 2023 10:49:12 +0200
-Subject: [PATCH 3/6] scons: add compile_commands.json target
+From a34fd8c1eb3e9e0f201546f5e474e9921c007f6d Mon Sep 17 00:00:00 2001
+From: David Xiong <daweix3@hermit-03.csl.illinois.edu>
+Date: Thu, 30 Apr 2026 13:25:17 -0500
+Subject: [PATCH] scons: add compile_commands.json target
 
+Change-Id: I52b89afe3bbe429dcfddbe8dcc84ba1f7fd4d0bd
 ---
  SConstruct     | 1 +
  src/SConscript | 4 ++++
@@ -36,5 +37,5 @@ index 4e7139c064..a8d5fa1e7a 100644
  
  from code_formatter import code_formatter
 -- 
-2.41.0
+2.50.1
 

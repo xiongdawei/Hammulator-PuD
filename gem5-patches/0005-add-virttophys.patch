@@ -1,7 +1,7 @@
 From 8f15830a5a235674129ff27a210f09288596c1c1 Mon Sep 17 00:00:00 2001
 From: Fabian Thomas <fabian.thomas@cispa.de>
 Date: Mon, 15 Sep 2025 19:06:21 +0200
-Subject: [PATCH 5/6] add virttophys
+Subject: [PATCH 5/7] add virttophys
 
 ---
  include/gem5/asm/generic/m5ops.h |  3 ++-
