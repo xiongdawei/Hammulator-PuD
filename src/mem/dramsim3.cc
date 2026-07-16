@@ -60,6 +60,13 @@ namespace memory
 namespace
 {
 
+int64_t
+saltSaturatingSub(int64_t x, double y)
+{
+    const double result = static_cast<double>(x) - y;
+    return result > 0.0 ? static_cast<int64_t>(result) : 0;
+}
+
 constexpr int kTraceDataRows = 300;
 constexpr const char *kSpecialTraceRows[] = {
     "C0", "C1",
@@ -414,12 +421,6 @@ DRAMsim3::subarrayKey(int channel, int rank, int bankgroup, int bank,
 }
 
 int
-DRAMsim3::saltRowsPerRef() const
-{
-    return std::max(1, config->rows / 8192);
-}
-
-int
 DRAMsim3::subarrayForRow(int row) const
 {
     if (config->salt_row_striping) {
@@ -514,69 +515,59 @@ DRAMsim3::performSaltRefreshForBank(int channel, int rank, int bankgroup,
                                     int bank)
 {
     auto &bank_state = getSaltBankState(channel, rank, bankgroup, bank);
-    const int rows_per_ref = saltRowsPerRef();
 
-    for (int i = 0; i < rows_per_ref; ++i) {
-        int subarray =
-            (bank_state.nextRefSubarray + i) % config->salt_subarrays;
-        auto &state =
-            getSaltSubarrayState(channel, rank, bankgroup, bank, subarray);
+    // Every refresh event decays a fixed-size, round-robin window of
+    // SALT_REFSPREAD subarrays rather than rescanning all of them, so the
+    // bookkeeping cost per refresh stays constant regardless of subarray
+    // count.
+    const int spread =
+        std::min(config->salt_refspread, config->salt_subarrays);
+    const int cycle = std::max(1, config->salt_subarrays / spread);
+    const int base = bank_state.ref_ptr % cycle;
+    const int start = base * spread;
+
+    // APMR = APM/7: one refresh's worth of the per-refresh-interval
+    // activation-per-mitigation budget, further derated by ABO_LEVEL.
+    const double decay = static_cast<double>(config->salt_apm) /
+        (7.0 * config->salt_abo_level);
+
+    for (int ii = 0; ii < spread; ++ii) {
+        int subarray = start + ii;
+        auto &state = getSaltSubarrayState(channel, rank, bankgroup, bank,
+                                           subarray);
+        state.actCtr = saltSaturatingSub(state.actCtr, decay);
+
+        // A refresh physically recharges one row per decayed subarray;
+        // reflect that in the bit-flip bookkeeping too.
         int row = bankRowFromSubarray(subarray, state.nextRow);
         clearSaltRow(channel, rank, bankgroup, bank, row);
         state.nextRow = (state.nextRow + 1) % config->salt_rows_per_subarray;
 
-        state.refAccumulator += config->salt_apm;
-        int reduction = state.refAccumulator / config->salt_bundle_rows;
-        state.refAccumulator %= config->salt_bundle_rows;
-        state.actCtr = std::max<int64_t>(0, state.actCtr - reduction);
         saltRefMitigations++;
     }
 
-    bank_state.nextRefSubarray =
-        (bank_state.nextRefSubarray + rows_per_ref) % config->salt_subarrays;
+    bank_state.ref_ptr++;
 }
 
 void
 DRAMsim3::performSaltAboForBank(int channel, int rank, int bankgroup, int bank)
 {
-    int selected_subarray = -1;
-    int64_t selected_ctr = 0;
-    for (int subarray = 0; subarray < config->salt_subarrays; ++subarray) {
-        auto &state = getSaltSubarrayState(channel, rank, bankgroup, bank,
-                                           subarray);
-        if (state.actCtr > selected_ctr) {
-            selected_ctr = state.actCtr;
-            selected_subarray = subarray;
-        }
-    }
+    auto &bank_state = getSaltBankState(channel, rank, bankgroup, bank);
+    const int pos = bank_state.cts;
+    auto &state = getSaltSubarrayState(channel, rank, bankgroup, bank, pos);
 
-    if (selected_subarray < 0 || selected_ctr <= 0) {
+    if (state.actCtr <= 0) {
         return;
     }
 
-    clearSaltRowsInSubarray(channel, rank, bankgroup, bank, selected_subarray,
+    // Alert Back-Off: physically refresh the hottest subarray's aggressor
+    // bundle so the bit-flip model actually benefits from the mitigation,
+    // then pay down its counter by one APM's worth.
+    clearSaltRowsInSubarray(channel, rank, bankgroup, bank, pos,
                             config->salt_bundle_rows,
                             config->salt_coord_refresh);
-    auto &state = getSaltSubarrayState(channel, rank, bankgroup, bank,
-                                       selected_subarray);
-    state.actCtr = std::max<int64_t>(0, state.actCtr - config->salt_apm);
+    state.actCtr = saltSaturatingSub(state.actCtr, config->salt_apm);
     saltAboMitigations++;
-}
-
-void
-DRAMsim3::performSaltAbo()
-{
-    saltAbos++;
-    for (int channel = 0; channel < config->channels; ++channel) {
-        for (int rank = 0; rank < config->ranks; ++rank) {
-            for (int bankgroup = 0;
-                 bankgroup < config->bankgroups; ++bankgroup) {
-                for (int bank = 0; bank < config->banks_per_group; ++bank) {
-                    performSaltAboForBank(channel, rank, bankgroup, bank);
-                }
-            }
-        }
-    }
 }
 
 bool
@@ -591,10 +582,22 @@ DRAMsim3::noteActivation(int channel, int rank, int bankgroup, int bank,
         return false;
     }
 
+    const int subarray = subarrayForRow(row);
     auto &state = getSaltSubarrayState(channel, rank, bankgroup, bank,
-                                       subarrayForRow(row));
+                                       subarray);
     state.actCtr++;
-    return state.actCtr > config->salt_ath;
+
+    // Greedily track the hottest subarray (SALT's O(1) "current top spot"):
+    // only compare the group that just moved against the incumbent, never
+    // rescan the bank.
+    auto &bank_state = getSaltBankState(channel, rank, bankgroup, bank);
+    auto &cts_state = getSaltSubarrayState(channel, rank, bankgroup, bank,
+                                           bank_state.cts);
+    if (state.actCtr > cts_state.actCtr) {
+        bank_state.cts = subarray;
+    }
+
+    return state.actCtr >= config->salt_ath;
 }
 
 bool
@@ -1074,7 +1077,8 @@ void DRAMsim3::readComplete(unsigned id, uint64_t addr, bool bufferhit)
         PRAC_ABO(channel, rank, bankgroup, bank, row);
     }
     if (config->salt_enabled && triggerSalt) {
-        performSaltAbo();
+        saltAbos++;
+        performSaltAboForBank(channel, rank, bankgroup, bank);
     }
 }
 
@@ -1163,7 +1167,8 @@ DRAMsim3::writeComplete(unsigned id, uint64_t addr, bool bufferhit)
         PRAC_ABO(a.channel, a.rank, a.bankgroup, a.bank, a.row);
     }
     if (triggerSalt) {
-        performSaltAbo();
+        saltAbos++;
+        performSaltAboForBank(a.channel, a.rank, a.bankgroup, a.bank);
     }
 }
 
@@ -1237,10 +1242,11 @@ void DRAMsim3::printMitigationStats()
     if (config->salt_enabled) {
         DPRINTF(PuDHammer,
                 "SALT Mode: %s (APM=%d ATH=%d subarrays=%d "
-                "rows/subarray=%d bundle=%d)\n",
+                "rows/subarray=%d bundle=%d abo_level=%d refspread=%d)\n",
                 config->salt_coord_refresh ? "SALT-C" : "SALT",
                 config->salt_apm, config->salt_ath, config->salt_subarrays,
-                config->salt_rows_per_subarray, config->salt_bundle_rows);
+                config->salt_rows_per_subarray, config->salt_bundle_rows,
+                config->salt_abo_level, config->salt_refspread);
         DPRINTF(PuDHammer, "SALT ABOs: %lu\n", saltAbos);
         DPRINTF(PuDHammer, "SALT ABO Bank Mitigations: %lu\n",
                 saltAboMitigations);

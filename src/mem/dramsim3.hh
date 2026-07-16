@@ -75,12 +75,17 @@ class DRAMsim3 : public AbstractMemory
         int64_t actCtr = 0;
         uint32_t nextBundleRow = 0;
         uint32_t nextRow = 0;
-        uint32_t refAccumulator = 0;
     };
 
     struct SaltBankState
     {
-        uint32_t nextRefSubarray = 0;
+        // Greedily-tracked hottest subarray (SALT's "current top spot"):
+        // updated in O(1) whenever a subarray's counter overtakes it,
+        // never by rescanning the bank.
+        uint32_t cts = 0;
+        // Round-robin cursor selecting which SALT_REFSPREAD subarrays get
+        // their counters decayed on each refresh event.
+        uint32_t ref_ptr = 0;
     };
 
     enum AttackMode
@@ -271,7 +276,6 @@ class DRAMsim3 : public AbstractMemory
     uint64_t bankKey(int channel, int rank, int bankgroup, int bank) const;
     uint64_t subarrayKey(int channel, int rank, int bankgroup, int bank,
                          int subarray) const;
-    int saltRowsPerRef() const;
     int subarrayForRow(int row) const;
     int rowIndexInSubarray(int row) const;
     int bankRowFromSubarray(int subarray, int row_index) const;
@@ -286,7 +290,6 @@ class DRAMsim3 : public AbstractMemory
                                  bool wrap_rows);
     void performSaltRefreshForBank(int channel, int rank, int bankgroup,
                                    int bank);
-    void performSaltAbo();
     void performSaltAboForBank(int channel, int rank, int bankgroup, int bank);
     bool noteActivation(int channel, int rank, int bankgroup, int bank,
                         int row, bool bufferhit);
