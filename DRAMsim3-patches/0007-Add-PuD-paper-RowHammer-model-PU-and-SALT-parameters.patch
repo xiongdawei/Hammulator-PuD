@@ -1,0 +1,161 @@
+From caddf271d4c12c0f1ec3ad9c65cdc5433e4d4196 Mon Sep 17 00:00:00 2001
+From: David Xiong <daweix3@hermit-03.csl.illinois.edu>
+Date: Fri, 20 Nov 2026 05:20:57 -0600
+Subject: [PATCH 7/7] Add PuD-paper RowHammer model, PU and SALT parameters
+
+- Model knobs: taggon/simra_n/double_sided/synergy/data_pattern/
+  direction_aware_flips, rowhammer_seed.
+- Protection Unit: pu_enabled, pu_threshold, pu_weight_{normal,comra,
+  simra}, pu_use_distance, pu_double_sided_aware.
+- fault_trace_enabled, time_refresh_resets.
+- SALT: salt_abo_level, salt_refspread.
+- Defaults reproduce the original model; SALT is off by default.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ configs/DDR4_8Gb_x8_2400.ini | 10 +++++--
+ src/configuration.cc         | 52 ++++++++++++++++++++++++++++++++++++
+ src/configuration.h          | 29 ++++++++++++++++++++
+ 3 files changed, 89 insertions(+), 2 deletions(-)
+
+diff --git a/configs/DDR4_8Gb_x8_2400.ini b/configs/DDR4_8Gb_x8_2400.ini
+index 859d136..b590856 100644
+--- a/configs/DDR4_8Gb_x8_2400.ini
++++ b/configs/DDR4_8Gb_x8_2400.ini
+@@ -146,8 +146,14 @@ salt_bundle_rows = 7
+ salt_rows_per_subarray = 512
+ salt_subarrays = 128
+ salt_target_max_activations = 3000
+-salt_apm = 0
+-salt_ath = 0
++salt_apm = 39
++salt_ath = 78
++# ABO_LEVEL derates the per-refresh counter decay (APM/7/ABO_LEVEL); higher
++# values mean slower decay and a more aggressive mitigation stance.
++salt_abo_level = 1
++# Number of subarrays whose counters are decayed (and get one row
++# proactively refreshed) per refresh event. 0 derives subarrays/16.
++salt_refspread = 0
+ 
+ [other]
+ epoch_period = 1204819
+diff --git a/src/configuration.cc b/src/configuration.cc
+index 254b00d..5995fe1 100644
+--- a/src/configuration.cc
++++ b/src/configuration.cc
+@@ -255,6 +255,40 @@ void Config::InitRowhammerParams() {
+     simra_taggon_max_penalty = reader.GetReal("rowhammer", "simra_taggon_max_penalty", 270.0); 
+     normal_taggon_max_penalty = reader.GetReal("rowhammer", "normal_taggon_max_penalty", 3.0);
+ 
++    // PuD-paper model extensions (defaults reproduce the original model)
++    taggon_enabled = reader.GetBoolean("rowhammer", "taggon_enabled", false);
++    simra_n_enabled = reader.GetBoolean("rowhammer", "simra_n_enabled", false);
++    simra_n_exponent = reader.GetReal("rowhammer", "simra_n_exponent", 1.0);
++    double_sided_enabled =
++        reader.GetBoolean("rowhammer", "double_sided_enabled", false);
++    // Geometric mean of PuDHammer's sandwich-CoMRA HCfirst reductions across
++    // four vendors (13.98, 1.18, 3.28, 1.58) ~= 3.0.
++    double_sided_multiplier =
++        reader.GetReal("rowhammer", "double_sided_multiplier", 3.0);
++    double_sided_window_ns =
++        reader.GetReal("rowhammer", "double_sided_window_ns", 10000.0);
++    synergy_enabled = reader.GetBoolean("rowhammer", "synergy_enabled", false);
++    synergy_multiplier = reader.GetReal("rowhammer", "synergy_multiplier", 1.66);
++    data_pattern_enabled =
++        reader.GetBoolean("rowhammer", "data_pattern_enabled", false);
++    data_pattern_zero_multiplier =
++        reader.GetReal("rowhammer", "data_pattern_zero_multiplier", 2.0);
++    direction_aware_flips =
++        reader.GetBoolean("rowhammer", "direction_aware_flips", false);
++    rowhammer_seed = static_cast<uint64_t>(
++        reader.GetInteger("rowhammer", "rowhammer_seed", 0));
++    pu_enabled = reader.GetBoolean("rowhammer", "pu_enabled", false);
++    pu_threshold = reader.GetReal("rowhammer", "pu_threshold", 2000.0);
++    pu_weight_normal = reader.GetReal("rowhammer", "pu_weight_normal", 1.0);
++    pu_weight_comra = reader.GetReal("rowhammer", "pu_weight_comra", CoMRA_weight);
++    pu_weight_simra = reader.GetReal("rowhammer", "pu_weight_simra", SiMRA_weight);
++    pu_use_distance = reader.GetBoolean("rowhammer", "pu_use_distance", true);
++    pu_double_sided_aware = reader.GetBoolean("rowhammer", "pu_double_sided_aware", false);
++    fault_trace_enabled =
++        reader.GetBoolean("rowhammer", "fault_trace_enabled", false);
++    time_refresh_resets =
++        reader.GetBoolean("rowhammer", "time_refresh_resets", true);
++
+     // Spatial Variation 
+     spatial_variation_enabled = reader.GetBoolean("rowhammer", "spatial_variation_enabled", false);
+     spatial_variation_stddev = reader.GetInteger("rowhammer", "spatial_variation_stddev", 0);
+@@ -326,6 +360,24 @@ void Config::InitRowhammerParams() {
+     if (salt_ath <= 0) {
+         salt_ath = 2 * salt_apm;
+     }
++
++    // ABO_LEVEL derates how much a single refresh's worth of activations
++    // (APM/7) gets subtracted from a subarray's counter on each refresh.
++    salt_abo_level = reader.GetInteger("rowhammer", "salt_abo_level", 1);
++    if (salt_abo_level <= 0) {
++        salt_abo_level = 1;
++    }
++
++    // SALT_REFSPREAD bounds how many subarrays get their counters decayed
++    // (and one row proactively refreshed) per refresh event, so the extra
++    // work is spread across many refreshes instead of scanning everything.
++    salt_refspread = reader.GetInteger("rowhammer", "salt_refspread", 0);
++    if (salt_refspread <= 0) {
++        salt_refspread = std::max(1, salt_subarrays / 16);
++    }
++    if (salt_refspread > salt_subarrays) {
++        salt_refspread = salt_subarrays;
++    }
+     return;
+ }
+ 
+diff --git a/src/configuration.h b/src/configuration.h
+index 9679e08..fc3c823 100644
+--- a/src/configuration.h
++++ b/src/configuration.h
+@@ -136,6 +136,8 @@ class Config {
+     int salt_target_max_activations;
+     int salt_apm;
+     int salt_ath;
++    int salt_abo_level;
++    int salt_refspread;
+ 
+     // Temperature Related parameters
+     double temperature;
+@@ -149,6 +151,33 @@ class Config {
+     double simra_taggon_max_penalty;
+     double normal_taggon_max_penalty;
+ 
++    // ---- PuD-paper model extensions (every knob defaults to OFF so the
++    // original Hammulator behaviour is reproduced unless enabled) ----
++    bool taggon_enabled;              // apply the row-on-time penalty
++    bool simra_n_enabled;             // N-dependent SiMRA multiplier
++    double simra_n_exponent;          // mult = (N/3)^exponent
++    bool double_sided_enabled;        // sandwich multiplier
++    double double_sided_multiplier;
++    double double_sided_window_ns;    // opposite neighbour activated within window
++    bool synergy_enabled;             // mode-switch (RH/CoMRA/SiMRA) synergy
++    double synergy_multiplier;
++    bool data_pattern_enabled;        // all-0 victim rows are weaker
++    double data_pattern_zero_multiplier;
++    bool direction_aware_flips;       // CoMRA 1->0 only, SiMRA 0->1 only
++    uint64_t rowhammer_seed;          // mixed into every flip RNG
++    // Protection Unit: victim-centric weighted counter ("count disturbance,
++    // not activations").
++    bool pu_enabled;
++    double pu_threshold;
++    double pu_weight_normal;
++    double pu_weight_comra;
++    double pu_weight_simra;
++    bool pu_use_distance;             // scale weight by inc_dist_k
++    bool pu_double_sided_aware;       // PU also applies double_sided_multiplier when the
++                                      // victim's opposite neighbour fired recently
++    bool fault_trace_enabled;         // write rh_faults.txt (activation idx, row, quad, mask)
++    bool time_refresh_resets;         // false: only the PuD clock (RH_PUD_WINDOW_NS) resets RH state
++
+     // Spatial Variation parameters
+     bool spatial_variation_enabled;
+     int spatial_variation_stddev;
+-- 
+2.50.1
+

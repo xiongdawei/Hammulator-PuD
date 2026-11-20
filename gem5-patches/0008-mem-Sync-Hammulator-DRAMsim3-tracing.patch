@@ -1,7 +1,7 @@
 From a4ed27015b4f5521652b527940109923ab239612 Mon Sep 17 00:00:00 2001
 From: David Xiong <daweix3@hermit-03.csl.illinois.edu>
 Date: Thu, 30 Apr 2026 13:45:13 -0500
-Subject: [PATCH] mem: Sync Hammulator DRAMsim3 tracing
+Subject: [PATCH 08/10] mem: Sync Hammulator DRAMsim3 tracing
 
 Change-Id: I47371b1067e390104e4314cc78f1ab56d75fcbb7
 ---

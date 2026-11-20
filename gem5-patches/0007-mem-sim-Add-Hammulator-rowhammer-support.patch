@@ -1,7 +1,7 @@
 From 7df812d369dd4ce01addf3773c019e360ae0dabe Mon Sep 17 00:00:00 2001
 From: David Xiong <daweix3@hermit-03.csl.illinois.edu>
 Date: Sun, 5 Apr 2026 16:56:17 -0500
-Subject: [PATCH 7/7] mem,sim: Add Hammulator rowhammer support
+Subject: [PATCH 07/10] mem,sim: Add Hammulator rowhammer support
 
 Change-Id: I6bf32d19cdd98ace10dab2b63b6ebfc286d4ae4f
 ---

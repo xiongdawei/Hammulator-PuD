@@ -3,7 +3,7 @@ import re
 
 # Path to your dram_trace directory
 folder_path = "/home/daweix3/dram_trace"
-save_path = "/home/daweix3/hammulator/progs/verify/trace"
+save_path = "/home/daweix3/hammulator/progs/verify/microworkloads"
 
 row_to_operand = {
     4: "T0",
@@ -24,6 +24,9 @@ row_to_operand = {
     34: "B_DCC1 T0 T3",
     36: "C0",
     38: "C1",
+    40: "R0",
+    42: "R1",
+    44: "R2"
 }
 
 # Regex to match "@PIM_AP <num>" OR "@PIM_AAP <num1> <num2>"
@@ -69,7 +72,7 @@ for filename in os.listdir(folder_path):
                 mapped_rows.append(f"AP {mapped1}")
 
         # Output file name: same base + "-hammulator_trace.txt"
-        output_filename = filename.replace("_row_summary.txt", "-hammulator_trace.txt")
+        output_filename = filename.replace("_console_row_summary.txt", ".txt")
         output_path = os.path.join(save_path, output_filename)
 
         print(f"✅ {filename}: extracted {len(mapped_rows)} rows → {output_filename}")

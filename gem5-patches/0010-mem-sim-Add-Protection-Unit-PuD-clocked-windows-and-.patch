@@ -1,0 +1,510 @@
+From d9551bb52af0d21e590055f38f09077a2df5d8f5 Mon Sep 17 00:00:00 2001
+From: David Xiong <daweix3@hermit-03.csl.illinois.edu>
+Date: Fri, 20 Nov 2026 05:23:48 -0600
+Subject: [PATCH 10/10] mem,sim: Add Protection Unit, PuD-clocked windows and
+ model knobs
+
+- Protection Unit (PU): victim-centric disturbance counter with
+  mode/distance/N-aware weights; optional double-sided awareness
+  (pu_double_sided_aware, "PU-DS").
+- PuD-clocked refresh windows: the replay program signals a window
+  boundary (m5_work_begin workid 10) and pudWindowReset() clears all
+  disturbance and mitigation counters; time_refresh_resets=false
+  disables DRAMsim3's time-based reset (harness time is ~140x slower
+  than real PuD). SALT-C is not modelled in that mode (warn_once).
+- Model factors as switches: tAggOn penalty, SiMRA N-dependence,
+  double-sided multiplier, mode-switch synergy, all-zero data pattern,
+  direction-aware flips; rowhammer_seed mixed into all flip RNGs.
+- PARA counts rows actually refreshed (para_refreshes).
+- Per-run rh_mitigation.txt and optional rh_faults.txt fault trace
+  (flushed on every write).
+
+Change-Id: I99e483ef6bcf7566dad1971a43a68a0b42ee875f
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ configs/common/MemConfig.py |   4 +
+ src/mem/dramsim3.cc         | 260 +++++++++++++++++++++++++++++++++++-
+ src/mem/dramsim3.hh         |  28 ++++
+ src/sim/pseudo_inst.cc      |  12 ++
+ 4 files changed, 300 insertions(+), 4 deletions(-)
+
+diff --git a/configs/common/MemConfig.py b/configs/common/MemConfig.py
+index 17dc0c87d9..6af3dcc6ce 100644
+--- a/configs/common/MemConfig.py
++++ b/configs/common/MemConfig.py
+@@ -253,6 +253,10 @@ def config_mem(options, system):
+                         )
+                     os.makedirs(dramsim_dir, exist_ok=True)
+                     mem_ctrl.filePath = dramsim_dir + os.sep
++                    # PuD-paper sweeps: choose the DRAMsim3 ini per run.
++                    ini_override = os.environ.get("PUD_DRAMSIM3_INI")
++                    if ini_override:
++                        mem_ctrl.configFile = os.path.abspath(ini_override)
+ 
+                 mem_ctrls.append(mem_ctrl)
+ 
+diff --git a/src/mem/dramsim3.cc b/src/mem/dramsim3.cc
+index 9f31b0960d..229395a4e0 100644
+--- a/src/mem/dramsim3.cc
++++ b/src/mem/dramsim3.cc
+@@ -45,10 +45,12 @@
+ #include <unordered_map>
+ 
+ #include "base/callback.hh"
++#include "base/output.hh"
+ #include "base/trace.hh"
+ #include "debug/DRAMsim3.hh"
+ #include "debug/Drain.hh"
+ #include "debug/PuDHammer.hh"
++#include "sim/core.hh"
+ #include "sim/system.hh"
+ 
+ namespace gem5
+@@ -395,7 +397,8 @@ DRAMsim3::accessAndRespond(PacketPtr pkt)
+ inline double DRAMsim3::gen_proba(uint64_t addr) {
+     auto pp = probabilities.find(addr);
+     if (pp == probabilities.end()) {
+-        std::ranlux48_base gen(addr);
++        std::ranlux48_base gen(
++            addr ^ (config->rowhammer_seed * 0x9E3779B97F4A7C15ULL));
+         probabilities[addr] = std::generate_canonical<double, 10>(gen);
+         return probabilities[addr];
+     } else {
+@@ -629,6 +632,7 @@ DRAMsim3::PARA(int channel, int rank, int bankgroup, int bank, int row)
+         uint64_t target = config->ReverseAddressMapping(channel, rank,
+                                                         bankgroup, bank,
+                                                         row + dist, 0);
++        para_refreshes++;
+         if (hammer_count.find(target) != hammer_count.end()) {
+             para_preventions++;
+         }
+@@ -767,6 +771,12 @@ int DRAMsim3::get_row_threshold(uint64_t row_base_addr) {
+ 
+ void DRAMsim3::readComplete(unsigned id, uint64_t addr, bool bufferhit)
+ {
++    if (global_rowhammer_pud_epoch != seen_pud_epoch) {
++        // A PuD refresh window (tREFW of PuD execution time) has elapsed:
++        // every row has been refreshed once, so disturbance restarts.
++        seen_pud_epoch = global_rowhammer_pud_epoch;
++        pudWindowReset();
++    }
+     DPRINTF(DRAMsim3, "Read to address %lld complete\n", addr);
+ 
+     current_attack_mode =
+@@ -875,6 +885,49 @@ void DRAMsim3::readComplete(unsigned id, uint64_t addr, bool bufferhit)
+     bool triggerPrac = notePracActivation(channel, rank, bankgroup, bank, row,
+                                           bufferhit);
+ 
++    // ---- PuD-paper: per-activation multipliers ----
++    total_trace_activations++;
++    const uint64_t agg_row_base = config->ReverseAddressMapping(
++        channel, rank, bankgroup, bank, row, 0);
++    const Tick now = curTick();
++    const uint64_t simra_n = global_rowhammer_simra_n;
++    double act_multiplier = 1.0;
++    // Attack synergy: interleaving RH / CoMRA / SiMRA lowers HCfirst
++    // (PuDHammer: 1.66x). Applied on every mode switch.
++    if (config->synergy_enabled && current_attack_mode != prev_act_mode) {
++        act_multiplier *= config->synergy_multiplier;
++        synergy_hits++;
++    }
++    prev_act_mode = current_attack_mode;
++    // Row-on-time: longer tAggOn lowers HCfirst. The ini supplies a static
++    // tAggOn for the PuD micro-op; penalty scales linearly in the excess
++    // over tRAS up to the configured maximum penalty.
++    if (config->taggon_enabled &&
++        config->tAggOn_max_ticks > config->tRAS_baseline_ticks) {
++        double excess = static_cast<double>(config->tAggOn -
++                                            config->tRAS_baseline_ticks) /
++            static_cast<double>(config->tAggOn_max_ticks -
++                                config->tRAS_baseline_ticks);
++        excess = std::clamp(excess, 0.0, 1.0);
++        const double max_pen = (current_attack_mode == SiMRA) ?
++            config->simra_taggon_max_penalty :
++            config->normal_taggon_max_penalty;
++        act_multiplier *= 1.0 + (max_pen - 1.0) * excess;
++    }
++    // Simultaneously activated rows: more rows -> lower HCfirst.
++    double n_multiplier = 1.0;
++    if (config->simra_n_enabled && current_attack_mode == SiMRA &&
++        simra_n > 0) {
++        n_multiplier = std::pow(static_cast<double>(simra_n) / 3.0,
++                                config->simra_n_exponent);
++        act_multiplier *= n_multiplier;
++    }
++    const double pu_mode_w = (current_attack_mode == SiMRA) ?
++        config->pu_weight_simra : (current_attack_mode == CoMRA) ?
++        config->pu_weight_comra : config->pu_weight_normal;
++    const Tick ds_window_ticks = static_cast<Tick>(
++        config->double_sided_window_ns * sim_clock::as_int::ns);
++
+     // no rowhammer effects when rowbuffer hit
+     // if (bufferhit) {
+     //     DPRINTF(PuDHammer,
+@@ -910,6 +963,7 @@ void DRAMsim3::readComplete(unsigned id, uint64_t addr, bool bufferhit)
+             // We don't increment for this distance
+             continue;
+         }
++        const double base_dist_add = add;
+ 
+ 
+         // handle temperature
+@@ -942,10 +996,43 @@ void DRAMsim3::readComplete(unsigned id, uint64_t addr, bool bufferhit)
+ 
+ 
+ 
+-        add = add * temp_multiplier;
++        add = add * temp_multiplier * act_multiplier;
+ 
+         uint64_t flipped_row_base = config->ReverseAddressMapping(
+             channel, rank, bankgroup, bank, row + dist, 0);
++
++        // Double-sided (sandwich): the victim's opposite neighbour
++        // (row + 2*dist) was activated recently.
++        bool ds_hit = false;
++        if (config->double_sided_enabled) {
++            const int opp = row + 2 * dist;
++            if (opp >= 0 && opp < config->rows) {
++                const uint64_t opp_base = config->ReverseAddressMapping(
++                    channel, rank, bankgroup, bank, opp, 0);
++                auto it = last_act_tick.find(opp_base);
++                if (it != last_act_tick.end() &&
++                    now - it->second <= ds_window_ticks) {
++                    add *= config->double_sided_multiplier;
++                    double_sided_hits++;
++                    ds_hit = true;
++                }
++            }
++        }
++        // Data pattern: all-0 victim rows are the most vulnerable.
++        if (config->data_pattern_enabled) {
++            bool all_zero = true;
++            for (uint64_t q = flipped_row_base;
++                 q < flipped_row_base + config->row_size;
++                 q += sizeof(uint64_t)) {
++                if (*(uint64_t*)this->toHostAddr(q) != 0) {
++                    all_zero = false;
++                    break;
++                }
++            }
++            if (all_zero) {
++                add *= config->data_pattern_zero_multiplier;
++            }
++        }
+         const uint64_t flipped_phys_addr =
+             config->ReverseAddressMapping(channel, rank, bankgroup, bank,
+                                           row + dist, a.column) +
+@@ -955,6 +1042,34 @@ void DRAMsim3::readComplete(unsigned id, uint64_t addr, bool bufferhit)
+         } else {
+             hammer_count[flipped_row_base] += add;
+         }
++
++        // Protection Unit: a victim-centric counter incremented by a
++        // mode/distance/N-aware weight (what the PU can observe), not by 1.
++        // When it reaches the threshold the victim row is refreshed.
++        if (config->pu_enabled) {
++            double w = pu_mode_w;
++            if (config->pu_use_distance) {
++                w *= base_dist_add;
++            }
++            w *= n_multiplier;
++            // The controller sees both neighbours' ACTs, so it can apply the
++            // same sandwich factor the physics applies.
++            if (config->pu_double_sided_aware && ds_hit) {
++                w *= config->double_sided_multiplier;
++            }
++            double &pc = pu_count[flipped_row_base];
++            pc += w;
++            if (pc >= config->pu_threshold) {
++                pu_mitigations++;
++                if (hammer_count.find(flipped_row_base) !=
++                    hammer_count.end()) {
++                    pu_preventions++;
++                }
++                hammer_count.erase(flipped_row_base);
++                pu_count.erase(flipped_row_base);
++                continue;
++            }
++        }
+         //DPRINTF(PuDHammer, "This is from distance %d\n", dist);
+         int flippedTraceRow = 0;
+         if (getTraceRow(config, channel, rank, bankgroup, bank, row + dist,
+@@ -1023,8 +1138,11 @@ void DRAMsim3::readComplete(unsigned id, uint64_t addr, bool bufferhit)
+             if (config->flip_mask) {
+                 mask = config->flip_mask;
+             } else {
+-                std::mt19937 gen(quad ^ 0xcafecafecafecafe);
+-                double flipped_bits_ran = std::generate_canonical<double, 10>(gen);
++                const uint64_t mix = (quad ^ 0xcafecafecafecafe) ^
++                    (config->rowhammer_seed * 0x9E3779B97F4A7C15ULL);
++                std::mt19937 gen(static_cast<uint32_t>(mix ^ (mix >> 32)));
++                double flipped_bits_ran =
++                    std::generate_canonical<double, 10>(gen);
+                 int flipped_bits;
+                 if (flipped_bits_ran <= config->proba_1_bit_flipped) {
+                     flipped_bits = 1;
+@@ -1050,6 +1168,21 @@ void DRAMsim3::readComplete(unsigned id, uint64_t addr, bool bufferhit)
+                 }
+             }
+ 
++            // Direction-aware flips: CoMRA disturbs 1->0, SiMRA 0->1
++            // (PuDHammer). Bits already in the target state cannot flip.
++            if (config->direction_aware_flips) {
++                const uint64_t cur = *(uint64_t*)this->toHostAddr(quad);
++                if (current_attack_mode == CoMRA) {
++                    mask &= cur;
++                } else if (current_attack_mode == SiMRA) {
++                    mask &= ~cur;
++                }
++                if (mask == 0) {
++                    flipped.erase(quad);
++                    continue;
++                }
++            }
++            total_bitflips_injected += __builtin_popcountll(mask);
+             // flip with mask
+             *(uint64_t*)this->toHostAddr(quad) ^= mask;
+             int bitflipTraceRow = 0;
+@@ -1059,6 +1192,17 @@ void DRAMsim3::readComplete(unsigned id, uint64_t addr, bool bufferhit)
+                 DPRINTF(PuDHammer,
+                         "Bit flip at row %s, address 0x%016lx, mask: "
+                         "0x%016lx\n", rowLabel.c_str(), quad, mask);
++                if (config->fault_trace_enabled) {
++                    if (!faultTraceOpen) {
++                        faultTrace.open(simout.directory() + "rh_faults.txt");
++                        faultTraceOpen = true;
++                    }
++                    faultTrace << total_trace_activations << ' ' << rowLabel
++                               << ' ' << ((quad - flipped_row_base) / 8)
++                               << ' ' << std::hex << mask << std::dec
++                               << ' ' << modeTag << '\n';
++                    faultTrace.flush();  // gem5 exits without destroying us
++                }
+             } else {
+                 DPRINTF(PuDHammer,
+                         "Bit flip at address 0x%016lx, mask: 0x%016lx\n",
+@@ -1067,6 +1211,8 @@ void DRAMsim3::readComplete(unsigned id, uint64_t addr, bool bufferhit)
+         }
+     }
+ 
++    last_act_tick[agg_row_base] = now;
++
+     if (config->para_enabled) {
+         PARA(channel, rank, bankgroup, bank, row);
+     }
+@@ -1178,6 +1324,17 @@ DRAMsim3::refreshComplete(unsigned id, int channel, int bankgroup, int bank)
+     const int actual_channel = id;
+     const int rank = channel;
+ 
++    if (!config->time_refresh_resets) {
++        // PuD-clocked windows (pudWindowReset) are used instead. REF-driven
++        // mechanisms (SALT-C) are not modelled in this mode.
++        if (config->salt_enabled && config->salt_coord_refresh) {
++            warn_once("salt_coord_refresh is ignored when "
++                      "time_refresh_resets=false (no REF events on the "
++                      "PuD clock)");
++        }
++        return;
++    }
++
+     if (config->salt_enabled && config->salt_coord_refresh) {
+         if (bankgroup == -1 || bank == -1) {
+             for (int bg = 0; bg < config->bankgroups; ++bg) {
+@@ -1229,6 +1386,17 @@ DRAMsim3::refreshComplete(unsigned id, int channel, int bankgroup, int bank)
+             ++it;
+         }
+     }
++    for (auto it = pu_count.begin(); it != pu_count.end();) {
++        dramsim3::Address a = config->AddressMapping(it->first);
++        if ((a.channel == actual_channel) &&
++            ((a.rank == rank) || (rank == -1)) &&
++            ((a.bankgroup == bankgroup) || (bankgroup == -1)) &&
++            ((a.bank == bank) || (bank == -1))) {
++            it = pu_count.erase(it);
++        } else {
++            ++it;
++        }
++    }
+     DPRINTF(DRAMsim3,
+             "Refresh at channel %d rank %d bankgroup %d bank %d complete\n",
+             actual_channel, rank, bankgroup, bank);
+@@ -1286,7 +1454,91 @@ void DRAMsim3::printMitigationStats()
+             prac_abos + trr_calls + para_calls);
+     DPRINTF(PuDHammer, "Total Prevented Bit Flips: %lu\n",
+             prac_preventions + trr_preventions + para_preventions);
++    DPRINTF(PuDHammer, "PU Enabled: %s\n", config->pu_enabled ? "yes" : "no");
++    if (config->pu_enabled) {
++        DPRINTF(PuDHammer, "PU Threshold: %.1f\n", config->pu_threshold);
++        DPRINTF(PuDHammer, "PU Victim Refreshes: %lu\n", pu_mitigations);
++        DPRINTF(PuDHammer, "PU Prevented Bit Flips: %lu\n", pu_preventions);
++    }
++    DPRINTF(PuDHammer, "Trace Activations: %lu\n", total_trace_activations);
++    DPRINTF(PuDHammer, "Bits Flipped (injected): %lu\n",
++            total_bitflips_injected);
+     DPRINTF(PuDHammer, "=========================================\n");
++    writeMitigationFile();
++}
++
++// Machine-readable copy of the mitigation counters, written next to
++// stats.txt so sweep scripts do not have to parse the debug log.
++void DRAMsim3::pudWindowReset()
++{
++    // Same effect as refreshComplete() on every bank: all disturbance and
++    // all per-row mitigation counters restart. `flipped` is kept so a quad
++    // is never flipped twice (conservative across windows).
++    hammer_count.clear();
++    prac_count.clear();
++    pu_count.clear();
++    trr_count.clear();
++    pud_window_resets++;
++}
++
++void DRAMsim3::writeMitigationFile()
++{
++    if (faultTraceOpen) {
++        faultTrace.flush();
++    }
++    OutputStream *os = simout.create("rh_mitigation.txt", false, true);
++    if (!os) {
++        return;
++    }
++    std::ostream &out = *os->stream();
++    out << "trace_activations=" << total_trace_activations << "\n";
++    out << "pud_window_resets=" << pud_window_resets << "\n";
++    out << "time_refresh_resets="
++        << (config->time_refresh_resets ? 1 : 0) << "\n";
++    out << "bits_flipped=" << total_bitflips_injected << "\n";
++    out << "quadwords_flipped=" << flipped.size() << "\n";
++    out << "synergy_hits=" << synergy_hits << "\n";
++    out << "double_sided_hits=" << double_sided_hits << "\n";
++    out << "prac_abo_enabled=" << (config->prac_abo_enabled ? 1 : 0) << "\n";
++    out << "prac_threshold=" << config->prac_threshold << "\n";
++    out << "prac_blast_radius=" << config->prac_blast_radius << "\n";
++    out << "prac_abos=" << prac_abos << "\n";
++    out << "prac_preventions=" << prac_preventions << "\n";
++    out << "salt_enabled=" << (config->salt_enabled ? 1 : 0) << "\n";
++    out << "salt_ath=" << config->salt_ath << "\n";
++    out << "salt_bundle_rows=" << config->salt_bundle_rows << "\n";
++    out << "salt_abos=" << saltAbos << "\n";
++    out << "salt_abo_mitigations=" << saltAboMitigations << "\n";
++    out << "salt_ref_mitigations=" << saltRefMitigations << "\n";
++    out << "salt_rows_refreshed=" << saltRowsRefreshed << "\n";
++    out << "para_enabled=" << (config->para_enabled ? 1 : 0) << "\n";
++    out << "para_calls=" << para_calls << "\n";
++    out << "para_refreshes=" << para_refreshes << "\n";
++    out << "para_proba=" << config->para_proba << "\n";
++    out << "para_preventions=" << para_preventions << "\n";
++    out << "trr_enabled=" << (config->trr_enabled ? 1 : 0) << "\n";
++    out << "trr_calls=" << trr_calls << "\n";
++    out << "trr_preventions=" << trr_preventions << "\n";
++    out << "pu_enabled=" << (config->pu_enabled ? 1 : 0) << "\n";
++    out << "pu_threshold=" << config->pu_threshold << "\n";
++    out << "pu_double_sided_aware="
++        << (config->pu_double_sided_aware ? 1 : 0) << "\n";
++    out << "pu_mitigations=" << pu_mitigations << "\n";
++    out << "pu_preventions=" << pu_preventions << "\n";
++    out << "hc_first=" << config->hc_first << "\n";
++    out << "simra_weight=" << config->SiMRA_weight << "\n";
++    out << "comra_weight=" << config->CoMRA_weight << "\n";
++    out << "rowhammer_seed=" << config->rowhammer_seed << "\n";
++    out << "taggon_enabled=" << (config->taggon_enabled ? 1 : 0) << "\n";
++    out << "simra_n_enabled=" << (config->simra_n_enabled ? 1 : 0) << "\n";
++    out << "double_sided_enabled="
++        << (config->double_sided_enabled ? 1 : 0) << "\n";
++    out << "synergy_enabled=" << (config->synergy_enabled ? 1 : 0) << "\n";
++    out << "data_pattern_enabled="
++        << (config->data_pattern_enabled ? 1 : 0) << "\n";
++    out << "direction_aware_flips="
++        << (config->direction_aware_flips ? 1 : 0) << "\n";
++    simout.close(os);
+ }
+ 
+ Port&
+diff --git a/src/mem/dramsim3.hh b/src/mem/dramsim3.hh
+index ef9d0323fc..5182af8ae8 100644
+--- a/src/mem/dramsim3.hh
++++ b/src/mem/dramsim3.hh
+@@ -44,6 +44,7 @@
+ #define __MEM_DRAMSIM3_HH__
+ 
+ #include <cstdint>
++#include <fstream>
+ #include <functional>
+ #include <map>
+ #include <queue>
+@@ -60,6 +61,11 @@
+ extern uint64_t global_rowhammer_attack_mode;
+ extern uint64_t global_rowhammer_trace_base_addr;
+ extern std::unordered_set<uint64_t> global_rowhammer_trace_row_bases;
++// Number of rows activated simultaneously by the current SiMRA micro-op
++// (set by the replay program through m5_work_begin(7, N)).
++extern uint64_t global_rowhammer_simra_n;
++// PuD refresh-window epoch, advanced by the replay program (workid 10).
++extern uint64_t global_rowhammer_pud_epoch;
+ 
+ namespace gem5
+ {
+@@ -302,8 +308,30 @@ class DRAMsim3 : public AbstractMemory
+     uint64_t trr_calls = 0;
+     uint64_t trr_preventions = 0;  // Times TRR cleared hammer_count
+     uint64_t para_calls = 0;
++    uint64_t para_refreshes = 0; // neighbour rows actually refreshed by PARA
+     uint64_t para_preventions = 0; // Times PARA cleared hammer_count
+ 
++    // ---- PuD-paper extensions ----
++    // row_base -> tick of the last activation (trace rows only), used for
++    // the double-sided (sandwich) detector.
++    std::unordered_map<uint64_t, Tick> last_act_tick;
++    AttackMode prev_act_mode = NORMAL;      // for the synergy multiplier
++    std::unordered_map<uint64_t, double> pu_count;  // Protection Unit counters
++    uint64_t pu_mitigations = 0;   // victim refreshes issued by the PU
++    uint64_t pu_preventions = 0;            // of which the victim had HC > 0
++    uint64_t total_trace_activations = 0;
++    uint64_t total_bitflips_injected = 0;   // bits actually flipped
++    uint64_t synergy_hits = 0;
++    uint64_t double_sided_hits = 0;
++    // Fault trace for the functional emulator (scripts/emulate.py):
++    // "<activation_index> <row_label> <quad_offset> <mask_hex> <mode>".
++    std::ofstream faultTrace;
++    bool faultTraceOpen = false;
++    void writeMitigationFile();
++    uint64_t seen_pud_epoch = 0;
++    uint64_t pud_window_resets = 0;
++    void pudWindowReset();
++
+     void printMitigationStats();
+ 
+     DrainState drain() override;
+diff --git a/src/sim/pseudo_inst.cc b/src/sim/pseudo_inst.cc
+index a5a4475429..333e55f1a2 100644
+--- a/src/sim/pseudo_inst.cc
++++ b/src/sim/pseudo_inst.cc
+@@ -75,6 +75,9 @@
+ uint64_t global_rowhammer_attack_mode = 0;
+ uint64_t global_rowhammer_trace_base_addr = 0;
+ std::unordered_set<uint64_t> global_rowhammer_trace_row_bases;
++uint64_t global_rowhammer_simra_n = 0;
++// Incremented by the replay program every PuD refresh window (workid 10).
++uint64_t global_rowhammer_pud_epoch = 0;
+ 
+ namespace gem5
+ {
+@@ -523,6 +526,15 @@ workbegin(ThreadContext *tc, uint64_t workid, uint64_t threadid)
+         global_rowhammer_trace_row_bases.insert(threadid);
+         return;
+     }
++    if (workid == 10) {
++        global_rowhammer_pud_epoch++;
++        return;
++    }
++    if (workid == 7) {
++        // Number of rows the next SiMRA micro-op activates at once.
++        global_rowhammer_simra_n = threadid;
++        return;
++    }
+ 
+     global_rowhammer_attack_mode = workid;
+ 
+-- 
+2.50.1
+
