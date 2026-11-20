@@ -76,9 +76,14 @@ apps:
   build: python3 scripts/build_app_traces.py    # optional: runs only if trace_dir is missing or empty
 ```
 
-The microworkloads come from `../progs/verify/microworkloads`. Generated traces are not committed
-and are built on first use: `traces/apps` (12 MIMDRAM applications, `scripts/build_app_traces.py`)
-and `traces/rearranged` (row-layout variants, `scripts/rearrange_traces.py`).
+The microworkloads come from `../progs/verify/microworkloads`. The generated traces are committed
+under `traces/`, so a fresh clone needs no build step:
+- `traces/apps`: 12 MIMDRAM applications plus `apps_info.json` (`scripts/build_app_traces.py`)
+- `traces/rearranged/{orig,thesis,sa}`: row-layout variants of the 32 microworkloads
+  (`scripts/rearrange_traces.py`)
+- `traces/tmr`: the thesis's 32 TMR microworkload traces (only 11 are really triplicated)
+
+A config's `build:` command runs only if its `trace_dir` is missing or empty.
 
 **An experiment** combines one workload with models, mechanisms, seeds and extra parameters:
 
@@ -121,7 +126,7 @@ Plot types:
 
 ## Output
 
-`results/` and `traces/` are ignored by git.
+`results/` is ignored by git.
 
 ```
 results/auto/
