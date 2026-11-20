@@ -1,0 +1,51 @@
+# Quick end-to-end check of the test workflow (30 runs, ~2 min on 44 cores):
+#   ./run_tests.sh -c configs/smoke.yaml
+# Self-contained minimal config; the full format is documented in experiments.yaml.
+
+paths:
+  hammulator: ..
+  base_ini: configs/base.ini
+  results: results/auto_smoke
+
+run: {jobs: 44, pud_window_ns: 64000000, debug: false}
+timing: {t_ap: 46, t_aap: 60, t_act: 50, t_rc: 46, t_abo: 180}
+metric: sim
+
+models:
+  fixed:
+    taggon_enabled: true
+    tAggOn: 60
+    simra_n_enabled: true
+    double_sided_enabled: true
+    double_sided_multiplier: 3.0
+    synergy_enabled: true
+    synergy_multiplier: 1.66
+
+mechanisms:
+  none: {label: No mitigation, color: "#8a8a85", set: {}}
+  prac:
+    label: PRAC+ABO
+    color: "#eb6834"
+    set: {prac_abo_enabled: true}
+    sweep: {prac_threshold: [20, 100]}
+    short: {prac_threshold: t}
+  pu_ds:
+    label: PU-DS (ours)
+    color: "#6250d6"
+    set: {pu_enabled: true, pu_double_sided_aware: true}
+    sweep: {pu_threshold: [2000, 4000]}
+    short: {pu_threshold: t}
+
+workloads:
+  micro_smoke:
+    trace_dir: ../progs/verify/microworkloads
+    include: ["00_addition", "11_multu", "16_divu"]
+
+experiments:
+  - name: smoke
+    description: Workflow smoke test (3 kernels, 2 seeds, PRAC vs. PU-DS).
+    workload: micro_smoke
+    model: fixed
+    seeds: [1337, 7]
+    mechanisms: [none, prac, pu_ds]
+    plots: [pareto, flips_bar, overhead_bar, totals_bar]

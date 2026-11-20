@@ -1,0 +1,175 @@
+# PuD-RowHammer automated test configuration.
+#
+#   ./run_tests.sh                         # every enabled experiment in this file
+#   ./run_tests.sh -c configs/smoke.yaml   # another config file
+#   ./run_tests.sh -e pareto_micro,weights # only these experiments (even if disabled)
+#   ./run_tests.sh --dry-run               # list the runs, start nothing
+#
+# Each experiment = workload x model(s) x mechanism variants x seeds x params grid.
+# Results:  <results>/<experiment>/runs/<config>/<trace>/   raw simulator output
+#           <results>/<experiment>/data.csv                one row per run
+#           <results>/<experiment>/summary.csv             one row per config (sum over traces)
+#           <results>/<experiment>/figures/*.png           plots listed under `plots`
+#           <results>/<experiment>/REPORT.md               tables + figures
+#           <results>/<experiment>/manifest.json           config snapshot, git commits, failures
+#           <results>/INDEX.md                             all experiments
+# Finished runs are skipped (resume); a run whose parameters changed is re-run.
+
+paths:
+  hammulator: ..                    # this hammulator checkout (gem5 + DRAMsim3 + harness)
+  base_ini: configs/base.ini        # DRAMsim3 profile; only [rowhammer] keys are overridden
+  results: results/auto             # relative paths are relative to hammulator/autotest
+
+run:
+  jobs: 44                          # parallel gem5 processes
+  pud_window_ns: 64000000           # PuD-clocked refresh window (tREFW of PuD time)
+  debug: false                      # PuDHammer debug log per run (large)
+
+# Timing model used for PuD time and mitigation overhead (ns).
+timing: {t_ap: 46, t_aap: 60, t_act: 50, t_rc: 46, t_abo: 180}
+
+# Which flip count is the headline metric: "sim" = simulator bits_flipped
+# (complete), "harness" = replay-harness scan (misses rows below row 0).
+metric: sim
+
+# ---------------------------------------------------------------------------
+# Physics models: named sets of [rowhammer] keys.
+models:
+  orig:                             # thesis-era model, all new factors off
+    taggon_enabled: false
+    simra_n_enabled: false
+    double_sided_enabled: false
+    synergy_enabled: false
+    data_pattern_enabled: false
+    direction_aware_flips: false
+  fixed:                            # Table-1 factors applied
+    taggon_enabled: true
+    tAggOn: 60
+    simra_n_enabled: true
+    simra_n_exponent: 1.0
+    double_sided_enabled: true
+    double_sided_multiplier: 3.0
+    synergy_enabled: true
+    synergy_multiplier: 1.66
+    data_pattern_enabled: false
+    direction_aware_flips: false
+  only_taggon:   {base: orig, taggon_enabled: true, tAggOn: 60}
+  only_simra_n:  {base: orig, simra_n_enabled: true}
+  only_double_sided: {base: orig, double_sided_enabled: true}
+  only_synergy:  {base: orig, synergy_enabled: true}
+
+# ---------------------------------------------------------------------------
+# Mitigation mechanisms. `set` = fixed keys, `sweep` = lists expanded as a grid
+# (each value becomes its own config), `derive` = keys computed from swept keys
+# (Python expression; available: swept keys, min, max, int, round).
+# `short` = names used in config labels, `label`/`color` = legend and plot colour.
+mechanisms:
+  none:
+    label: No mitigation
+    color: "#8a8a85"
+    set: {}
+  salt:
+    label: SALT
+    color: "#eda100"
+    set: {salt_enabled: true}
+    sweep: {salt_ath: [10, 40, 78, 300]}
+    derive: {salt_apm: "max(1, salt_ath // 2)"}
+    short: {salt_ath: ath}
+  prac:
+    label: PRAC+ABO
+    color: "#eb6834"
+    set: {prac_abo_enabled: true}
+    sweep: {prac_threshold: [10, 20, 50, 100, 200, 500, 1000]}
+    short: {prac_threshold: t}
+  para:
+    label: PARA
+    color: "#1baf7a"
+    set: {para_enabled: true}
+    sweep: {para_proba: [0.001, 0.01, 0.05]}
+    short: {para_proba: p}
+  pu:
+    label: PU (ours)
+    color: "#2a78d6"
+    set: {pu_enabled: true}
+    sweep: {pu_threshold: [500, 1000, 2000, 3000, 4000]}
+    short: {pu_threshold: t}
+  pu_ds:
+    label: PU-DS (ours)
+    color: "#6250d6"
+    set: {pu_enabled: true, pu_double_sided_aware: true}
+    sweep: {pu_threshold: [1000, 2000, 3000, 4000, 6000]}
+    short: {pu_threshold: t}
+
+# ---------------------------------------------------------------------------
+# Workloads: a directory of replay traces (*.txt) plus substring filters.
+workloads:
+  micro:
+    trace_dir: ../progs/verify/microworkloads
+    exclude: ["99_"]
+  apps:                             # build with: python3 scripts/build_app_traces.py
+    trace_dir: traces/apps
+    build: python3 scripts/build_app_traces.py
+  layout_sa:
+    trace_dir: traces/rearranged/sa
+    exclude: ["99_"]
+    build: python3 scripts/rearrange_traces.py --src ../progs/verify/microworkloads --dst traces/rearranged
+  micro_smoke:
+    trace_dir: ../progs/verify/microworkloads
+    include: ["00_addition", "11_multu", "16_divu"]
+
+# ---------------------------------------------------------------------------
+# Experiments. Mechanism entries are a name, or {name: ..., <key>: [values]}
+# to override that mechanism's sweep for this experiment.
+# plots: pareto | flips_bar | overhead_bar | heatmap | totals_bar
+experiments:
+  - name: pareto_micro
+    enabled: true
+    description: Flips vs. overhead for every mechanism across its range (32 microworkloads, 3 seeds).
+    workload: micro
+    model: fixed
+    seeds: [1337, 7, 42]
+    mechanisms: [none, salt, prac, para, pu, pu_ds]
+    plots: [pareto, heatmap]
+
+  - name: ablation
+    enabled: true
+    description: Contribution of each physics factor (no mitigation).
+    workload: micro
+    models: [orig, only_taggon, only_simra_n, only_double_sided, only_synergy, fixed]
+    seeds: [1337]
+    mechanisms: [none]
+    plots: [totals_bar]
+
+  - name: weights
+    enabled: true
+    description: Sensitivity to the SiMRA disturbance weight.
+    workload: micro
+    model: fixed
+    seeds: [1337]
+    mechanisms: [none, {name: pu_ds, pu_threshold: [4000]}]
+    params: {SiMRA_weight: [50, 100, 158, 200, 300]}
+    plots: [totals_bar]
+
+  - name: layout_sa
+    enabled: false
+    description: Simulated-annealing row layout.
+    workload: layout_sa
+    model: fixed
+    seeds: [1337]
+    mechanisms: [none, {name: prac, prac_threshold: [20]}, {name: pu_ds, pu_threshold: [4000]}]
+    plots: [flips_bar, totals_bar]
+
+  - name: apps
+    enabled: false                  # ~50 min per run; 12 apps x 9 configs ~ 3 h on 44 cores
+    description: 12 MIMDRAM applications, one 64 ms PuD window each.
+    workload: apps
+    model: fixed
+    seeds: [1337]
+    mechanisms:
+      - none
+      - {name: salt, salt_ath: [78]}
+      - {name: prac, prac_threshold: [20, 100]}
+      - {name: para, para_proba: [0.01]}
+      - {name: pu, pu_threshold: [2000, 4000]}
+      - {name: pu_ds, pu_threshold: [2000, 4000]}
+    plots: [flips_bar, overhead_bar, pareto]
