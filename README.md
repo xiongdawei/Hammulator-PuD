@@ -123,7 +123,6 @@ Compared with the original Hammulator setup, this tree adds or extends:
   - `TRR`
   - `PRAC+ABO`
   - `SALT`
-  - `SALT-C`
 
 ### Output Handling
 
