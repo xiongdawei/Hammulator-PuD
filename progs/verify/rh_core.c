@@ -17,9 +17,15 @@
 #define SET_MODE_COMRA     m5_work_begin(1, 0)
 #define SET_MODE_SIMRA     m5_work_begin(2, 0)
 #define SET_MODE_RESET     m5_work_begin(3, 0)
+#define SET_SIMRA_N(n)     m5_work_begin(7, (uint64_t)(n))
 #define SET_TRACE_BASE_ADDR(addr) m5_work_begin(4, (uint64_t)(addr))
 #define CLEAR_TRACE_ROWS() m5_work_begin(5, 0)
 #define ADD_TRACE_ROW_BASE(addr) m5_work_begin(6, (uint64_t)(addr))
+// PuD-clocked refresh window (pud-paper): the harness keeps PuD time
+// (tAP/tAAP/tACT per event) and tells the simulator when a refresh window
+// (RH_PUD_WINDOW_NS, e.g. 64e6) has elapsed, because the replay program's
+// own simulated time is ~100x slower than back-to-back PuD execution.
+#define PUD_WINDOW_RESET()  m5_work_begin(10, 0)
 
 #define PAGE_SIZE 4096
 #define D_ROW_SIZE 300
@@ -32,6 +38,7 @@
 #define tAP 46
 #define tAAP 60
 #define tREF 46
+#define tACT 50   // one plain activation of an LC-MOV/GB-MOV column move
 
 typedef struct {
     uint32_t offsets[MAX_ROWS_PER_LINE];
@@ -47,7 +54,7 @@ extern int syscall_emulation;
 const char* special_row_sequence[SPECIAL_ROW_COUNT] = {
     "C0", "C1",
     "T0", "T1", "T2", "T3",
-    "B_DCC0", "B_DCC0N", "B_DCC1", "B_DCC1N",
+    "B_DCC1", "B_DCC1N", "B_DCC0", "B_DCC0N",
     "R0", "R1", "R2"
 };
 
@@ -65,6 +72,9 @@ static int refresh_count[D_ROW_SIZE + SPECIAL_ROW_COUNT];
 static uint64_t total_ap_count = 0;
 static uint64_t total_aap_count = 0;
 static uint64_t total_refresh_count = 0;
+static uint64_t total_act_count = 0;
+static uint64_t pud_windows = 0;
+static int special_counter_of_pos[SPECIAL_ROW_COUNT];
 
 uint64_t co = 0; 
 
@@ -183,6 +193,17 @@ void rh_init(void) {
         else if (strcmp(special_row_sequence[i], "R1") == 0) R1 = ptr;
         else if (strcmp(special_row_sequence[i], "R2") == 0) R2 = ptr;
     }
+    {
+        static const char *counter_names[SPECIAL_ROW_COUNT] = {
+            "C0", "C1", "T0", "T1", "T2", "T3",
+            "B_DCC1", "B_DCC1N", "B_DCC0", "B_DCC0N", "R0", "R1", "R2"};
+        for (int i = 0; i < SPECIAL_ROW_COUNT; i++) {
+            special_counter_of_pos[i] = -1;
+            for (int j = 0; j < SPECIAL_ROW_COUNT; j++)
+                if (strcmp(special_row_sequence[i], counter_names[j]) == 0)
+                    special_counter_of_pos[i] = j;
+        }
+    }
 
     uint64_t trace_base_addr = get_actual_physical_addr((uintptr_t)reg_file[0]);
     if (trace_base_addr != 0) {
@@ -195,7 +216,7 @@ void rh_init(void) {
 
         uint8_t *special_rows[] = {
             C0, C1, T0, T1, T2, T3,
-            B_DCC0, B_DCC0N, B_DCC1, B_DCC1N,
+            B_DCC1, B_DCC1N, B_DCC0, B_DCC0N,
             R0, R1, R2
         };
         for (size_t i = 0; i < sizeof(special_rows) / sizeof(special_rows[0]); i++) {
@@ -213,10 +234,10 @@ void rh_init(void) {
     print_address(T1);
     print_address(T2);
     print_address(T3);
-    print_address(B_DCC0);
-    print_address(B_DCC0N);
     print_address(B_DCC1);
     print_address(B_DCC1N);
+    print_address(B_DCC0);
+    print_address(B_DCC0N);
     print_address(R0);
     print_address(R1);
     print_address(R2);
@@ -230,6 +251,8 @@ void rh_reset_stats(void) {
     memset(special_bitflips, 0, sizeof(special_bitflips));
     memset(refresh_count, 0, sizeof(refresh_count));
     total_ap_count = 0;
+    total_act_count = 0;
+    pud_windows = 0;
     total_aap_count = 0;
     total_refresh_count = 0;
 }
@@ -279,10 +302,10 @@ static int get_refresh_count_index(const char* label_raw) {
     if (strcmp(label, "T1") == 0) return D_ROW_SIZE + 3;
     if (strcmp(label, "T2") == 0) return D_ROW_SIZE + 4;
     if (strcmp(label, "T3") == 0) return D_ROW_SIZE + 5;
-    if (strcmp(label, "B_DCC0") == 0) return D_ROW_SIZE + 6;
-    if (strcmp(label, "B_DCC0N") == 0) return D_ROW_SIZE + 7;
-    if (strcmp(label, "B_DCC1") == 0) return D_ROW_SIZE + 8;
-    if (strcmp(label, "B_DCC1N") == 0) return D_ROW_SIZE + 9;
+    if (strcmp(label, "B_DCC1") == 0) return D_ROW_SIZE + 6;
+    if (strcmp(label, "B_DCC1N") == 0) return D_ROW_SIZE + 7;
+    if (strcmp(label, "B_DCC0") == 0) return D_ROW_SIZE + 8;
+    if (strcmp(label, "B_DCC0N") == 0) return D_ROW_SIZE + 9;
     if (strcmp(label, "R0") == 0) return D_ROW_SIZE + 10;
     if (strcmp(label, "R1") == 0) return D_ROW_SIZE + 11;
     if (strcmp(label, "R2") == 0) return D_ROW_SIZE + 12;
@@ -290,7 +313,7 @@ static int get_refresh_count_index(const char* label_raw) {
     return -1;
 }
 
-static void print_row_name(uint8_t *ptr) {
+static void __attribute__((unused)) print_row_name(uint8_t *ptr) {
     for (int i = 0; i < D_ROW_SIZE; i++) {
         if (ptr == reg_file[i]) { 
             printf("%d ", i); 
@@ -315,25 +338,18 @@ static void print_row_name(uint8_t *ptr) {
 }
 
 static void increment_access_count(uint8_t *ptr) {
-    for (int i = 0; i < D_ROW_SIZE; i++) {
-        if (ptr == reg_file[i]) { regfile_access_count[i]++; return; }
-    }
-    if (ptr == C0) { special_access_count[0]++; return; }
-    if (ptr == C1) { special_access_count[1]++; return; }
-    if (ptr == T0) { special_access_count[2]++; return; }
-    if (ptr == T1) { special_access_count[3]++; return; }
-    if (ptr == T2) { special_access_count[4]++; return; }
-    if (ptr == T3) { special_access_count[5]++; return; }
-    if (ptr == B_DCC0) { special_access_count[6]++; return; }
-    if (ptr == B_DCC0N) { special_access_count[7]++; return; }
-    if (ptr == B_DCC1) { special_access_count[8]++; return; }
-    if (ptr == B_DCC1N) { special_access_count[9]++; return; }
-    if (ptr == R0) { special_access_count[10]++; return; }
-    if (ptr == R1) { special_access_count[11]++; return; }
-    if (ptr == R2) { special_access_count[12]++; return; }
+    // O(1): rows are laid out at dram + idx*DIST (D rows, then special rows
+    // in special_row_sequence order). Replaces a 300-entry linear search per
+    // activation that dominated the replay program's simulated time.
+    if (ptr < dram) return;
+    long idx = (long)((ptr - dram) / DIST);
+    if (idx < D_ROW_SIZE) { regfile_access_count[idx]++; return; }
+    idx -= D_ROW_SIZE;
+    if (idx < SPECIAL_ROW_COUNT && special_counter_of_pos[idx] >= 0)
+        special_access_count[special_counter_of_pos[idx]]++;
 }
 
-void rh_hammer(const char *filename) {
+void rh_hammer(const char *filename, long target_events) {
     FILE *fp = fopen(filename, "r");
     if (!fp) {
         perror("fopen");
@@ -372,6 +388,11 @@ void rh_hammer(const char *filename) {
             total_aap_count++;
             current_event.command_type = 1;  // AAP
             token = strtok(NULL, " ,\n\r\t"); 
+        } else if (strcmp(token, "ACT") == 0) {
+            // plain activation(s) in NORMAL mode (column moves); counted per
+            // row below, since an "ACT r1 r2" line costs 2 x tACT
+            current_event.command_type = 3;
+            token = strtok(NULL, " ,\n\r\t");
         } else if (strcmp(token, "REF") == 0) {
             current_event.command_type = 2;  // REF
             // REF command: REF row1 row2 row3... => refresh multiple rows
@@ -410,6 +431,9 @@ void rh_hammer(const char *filename) {
         }
 
         if (current_event.num_rows > 0 && current_event.command_type >= 0) {
+            if (current_event.command_type == 3) {
+                total_act_count += current_event.num_rows;
+            }
             if (event_count >= capacity) {
                 capacity *= 2; 
                 events = (hammer_event_t *)realloc(events, capacity * sizeof(hammer_event_t));
@@ -425,9 +449,24 @@ void rh_hammer(const char *filename) {
 
     int total_mmap_size = DIST * (D_ROW_SIZE + SPECIAL_ROW_COUNT);
 
-    for (int i = 0; i < event_count; i++) {
+    // target_events <= 0 preserves the original one-pass-through behavior.
+    // target_events > 0 replays the parsed events, wrapping around, until
+    // that many have executed (short traces get repeated to pad them out).
+    long runs = target_events > 0 ? target_events : event_count;
+
+    uint64_t pud_window_ns = 0;
+    {
+        const char *w = getenv("RH_PUD_WINDOW_NS");
+        if (w && *w) pud_window_ns = strtoull(w, NULL, 10);
+    }
+    uint64_t pud_now_ns = 0, pud_next_reset_ns = pud_window_ns;
+
+    for (long n = 0; n < runs; n++) {
+        if (event_count <= 0) break;
+        int i = (int)(n % event_count);
+
         int safe_num_rows = events[i].num_rows;
-        
+
         if (safe_num_rows > MAX_ROWS_PER_LINE || safe_num_rows < 0) {
             safe_num_rows = safe_num_rows % (MAX_ROWS_PER_LINE + 1);
             if (safe_num_rows < 0) safe_num_rows = -safe_num_rows;
@@ -437,12 +476,27 @@ void rh_hammer(const char *filename) {
         if (events[i].command_type == 0) {
             // AP trace
             SET_MODE_SIMRA;
+            SET_SIMRA_N(safe_num_rows);
         } else if (events[i].command_type == 1) {
             // AAP trace
             SET_MODE_COMRA;
         } else if (events[i].command_type == 2) {
             // REF trace
             SET_MODE_NORMAL;
+        } else if (events[i].command_type == 3) {
+            // plain activation (LC-MOV / GB-MOV half)
+            SET_MODE_NORMAL;
+        }
+
+        if (pud_window_ns) {
+            pud_now_ns += events[i].command_type == 0 ? tAP
+                        : events[i].command_type == 1 ? tAAP
+                        : (uint64_t)tACT * (uint64_t)safe_num_rows;
+            if (pud_now_ns >= pud_next_reset_ns) {
+                PUD_WINDOW_RESET();
+                pud_windows++;
+                pud_next_reset_ns += pud_window_ns;
+            }
         }
 
         for (int j = 0; j < safe_num_rows; j++) {
@@ -502,12 +556,17 @@ void rh_collect_bitflips(void) {
     }
     struct { const char *name; uint8_t *ptr; } extras[] = {
         {"C0", C0}, {"C1", C1}, {"T0", T0}, {"T1", T1}, {"T2", T2}, {"T3", T3},
-        {"B_DCC0", B_DCC0}, {"B_DCC0N", B_DCC0N}, {"B_DCC1", B_DCC1}, {"B_DCC1N", B_DCC1N},
+        {"B_DCC1", B_DCC1}, {"B_DCC1N", B_DCC1N}, {"B_DCC0", B_DCC0}, {"B_DCC0N", B_DCC0N},
         {"R0", R0}, {"R1", R1}, {"R2", R2}
     };
     for (int i = 0; i < SPECIAL_ROW_COUNT; i++) {
         special_bitflips[i] = scan_int(extras[i].name, extras[i].ptr);
     }
+}
+
+static int env_flag_enabled(const char *name) {
+    const char *value = getenv(name);
+    return value && value[0] != '\0' && strcmp(value, "0") != 0;
 }
 
 void dump_final_info(const char *trace) {
@@ -533,10 +592,49 @@ void dump_final_info(const char *trace) {
     tmp[sizeof(tmp) - 1] = '\0';
 
     char *ext = strrchr(tmp, '.');
-    if (ext) *ext = '\0'; 
+    if (ext) *ext = '\0';
+
+    // PuD-paper sweeps: optional free-form tag so parallel runs of the same
+    // trace never clobber each other.
+    const char *rh_tag = getenv("RH_TAG");
+    if (rh_tag && rh_tag[0] != '\0') {
+        strncat(tmp, "-", sizeof(tmp) - strlen(tmp) - 1);
+        strncat(tmp, rh_tag, sizeof(tmp) - strlen(tmp) - 1);
+    }
+
+    // Tag the report filename with whichever RH mitigation method(s) were
+    // active for this run, so different-mitigation runs of the same trace
+    // don't clobber each other. Driven by env vars (set via gem5's --env)
+    // rather than compile-time flags so the same binary can be reused
+    // across configurations.
+    if (env_flag_enabled("RH_SALT_ENABLED")) {
+        if (env_flag_enabled("RH_SALT_COORD_REFRESH")) {
+            strncat(tmp, "-SALT-C", sizeof(tmp) - strlen(tmp) - 1);
+        } else {
+            strncat(tmp, "-SALT", sizeof(tmp) - strlen(tmp) - 1);
+        }
+    }
+    if (env_flag_enabled("RH_PRAC_ABO_ENABLED")) {
+        strncat(tmp, "-PRAC-ABO", sizeof(tmp) - strlen(tmp) - 1);
+    }
+    if (env_flag_enabled("RH_TRR_ENABLED")) {
+        strncat(tmp, "-TRR", sizeof(tmp) - strlen(tmp) - 1);
+    }
+    if (env_flag_enabled("RH_PARA_ENABLED")) {
+        strncat(tmp, "-PARA", sizeof(tmp) - strlen(tmp) - 1);
+    }
+    if (!(env_flag_enabled("RH_SALT_ENABLED") ||
+          env_flag_enabled("RH_PRAC_ABO_ENABLED") ||
+          env_flag_enabled("RH_TRR_ENABLED") ||
+          env_flag_enabled("RH_PARA_ENABLED"))) {
+        strncat(tmp, "-baseline", sizeof(tmp) - strlen(tmp) - 1);
+    }
 
     char report_dir[512];
-    if (verify_dir) {
+    const char *rh_report_dir = getenv("RH_REPORT_DIR");
+    if (rh_report_dir && rh_report_dir[0] != '\0') {
+        snprintf(report_dir, sizeof(report_dir), "%s", rh_report_dir);
+    } else if (verify_dir) {
         size_t prefix_len = (size_t)(verify_dir - trace) + strlen(verify_marker);
         if (prefix_len >= sizeof(report_dir)) {
             fprintf(stderr, "report directory path is too long: %s\n", trace);
@@ -551,8 +649,8 @@ void dump_final_info(const char *trace) {
     }
 
     char outname[768];
-    if (snprintf(outname, sizeof(outname), "%s/%s-final-report.txt", report_dir, tmp) >= (int)sizeof(outname)) {
-        fprintf(stderr, "report file path is too long: %s/%s-final-report.txt\n", report_dir, tmp);
+    if (snprintf(outname, sizeof(outname), "%s/%s-report.txt", report_dir, tmp) >= (int)sizeof(outname)) {
+        fprintf(stderr, "report file path is too long: %s/%s-report.txt\n", report_dir, tmp);
         return;
     }
 
@@ -575,7 +673,8 @@ void dump_final_info(const char *trace) {
     uint64_t total_ap_time_ns = total_ap_count * tAP;   
     uint64_t total_aap_time_ns = total_aap_count * tAAP; 
     uint64_t total_refresh_time_ns = total_refresh_count * tREF;
-    uint64_t total_pim_time_ns = total_ap_time_ns + total_aap_time_ns;
+    uint64_t total_pim_time_ns = total_ap_time_ns + total_aap_time_ns +
+                                 total_act_count * (uint64_t)tACT;
 
     fprintf(fp, "================== FINAL RH REPORT ==================\n");
     fprintf(fp, "Source trace: %s\n", source_trace);
@@ -586,6 +685,8 @@ void dump_final_info(const char *trace) {
     fprintf(fp, "--------------- PIM OPERATIONS & TIME ---------------\n");
     fprintf(fp, "Total AP Operations:      %10lu | Est. Time: %lu ns\n", total_ap_count, total_ap_time_ns);
     fprintf(fp, "Total AAP Operations:     %10lu | Est. Time: %lu ns\n", total_aap_count, total_aap_time_ns);
+    fprintf(fp, "Total ACT Rows:           %10lu | Est. Time: %lu ns\n", total_act_count, total_act_count * (uint64_t)tACT);
+    fprintf(fp, "PuD Refresh Windows:      %10lu\n", pud_windows);
     fprintf(fp, "Total Refresh Operations: %10lu | Est. Time: %lu ns\n", total_refresh_count, total_refresh_time_ns);   
     fprintf(fp, "-----------------------------------------------------\n");
     fprintf(fp, "Total Est. PIM Execution Time: %lu ns (%.6f ms)\n", 
@@ -602,7 +703,7 @@ void dump_final_info(const char *trace) {
     fprintf(fp, "\n--------------- SPECIAL ROWS ---------------\n");
     const char *names[SPECIAL_ROW_COUNT] = {
         "C0", "C1", "T0", "T1", "T2", "T3",
-        "B_DCC0", "B_DCC0N", "B_DCC1", "B_DCC1N",
+        "B_DCC1", "B_DCC1N", "B_DCC0", "B_DCC0N",
         "R0", "R1", "R2"
     };
     for (int i = 0; i < SPECIAL_ROW_COUNT; i++) {
@@ -612,4 +713,5 @@ void dump_final_info(const char *trace) {
     fprintf(fp, "======================================================\n");
     fclose(fp);
     printf("Final report saved to: %s\n", outname);
+    fflush(stdout);
 }

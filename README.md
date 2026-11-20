@@ -219,6 +219,19 @@ The default syscall-emulation configuration uses:
 - `--repeat-switch 1`
 - `--mem-type=DRAMsim3`
 
+### Automated Experiments
+
+`autotest/` runs whole experiment sweeps (physics models × mitigations × seeds × workloads) from one
+YAML config, then collects CSVs, plots and per-experiment reports:
+
+```bash
+cd autotest
+./run_tests.sh -c configs/smoke.yaml   # 2-minute end-to-end check
+./run_tests.sh --dry-run               # list the runs of configs/experiments.yaml
+```
+
+See [autotest/README.md](autotest/README.md) for the config format and options.
+
 ## Switching Modes Inside A Workload
 
 The current implementation uses `workid` from `m5_work_begin(workid, threadid)` as the rowhammer mode selector.

@@ -1,1 +1,0 @@
-make verify VERIFY_SUBDIR=microworkloads_trace VERIFY_PATTERN='*.txt'

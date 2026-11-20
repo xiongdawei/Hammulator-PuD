@@ -1,7 +1,7 @@
 # PT privesc exploit
 cpu-clock := 2GHz
 memsize := 2GB
-debug-flags := DRAMsim3,PuDHammer
+debug-flags := PuDHammer
 # benchmarks
 # cpu-clock := 3GHz
 # memsize := 1GB
@@ -37,8 +37,13 @@ CC=gcc
 CXX=g++
 
 MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
-TRACE_DIR := $(MAKEFILE_DIR)/progs/verify/microworkloads
-TRACE := $(wildcard $(TRACE_DIR)/00*.txt)
+# TRACE_DIR := $(MAKEFILE_DIR)/progs/verify/PIM_trace/polybench
+TRACE_DIR := $(MAKEFILE_DIR)progs/verify/microworkloads
+TRACE := $(wildcard $(TRACE_DIR)/*.txt)
+
+# The DRAMsim3 config that's actually in effect (matches the default
+# `configFile` in gem5/src/mem/DRAMsim3.py; nothing overrides it today).
+DRAMSIM3_INI := $(GEM5_HOME)/ext/dramsim3/DRAMsim3/configs/DDR4_8Gb_x8_2400.ini
 
 
 ################################################################################
@@ -138,9 +143,40 @@ fs-create-checkpoint: build/tmp.img
 fs-restore: build/tmp.img
 	build/X86/gem5.opt $(gem5_args) gem5/configs/example/fs.py $(fs-args) --cpu-type=X86KvmCPU -r 1 --restore-with-cpu=X86KvmCPU --repeat-switch 1
 
-verify: build/tmp_root/verify
+# Mirrors $(DRAMSIM3_INI)'s [rowhammer] mitigation flags into env vars that
+# rh_core.c reads (see dump_final_info) to tag report filenames, so
+# `salt_enabled = true` in the ini actually produces "-SALT" reports instead
+# of silently falling back to "-baseline".
+build/rh_env.txt: $(DRAMSIM3_INI)
+	mkdir -p build
+	awk ' \
+		/^[ \t]*salt_enabled[ \t]*=/ { salt = ($$0 ~ /true/) ? 1 : 0 } \
+		/^[ \t]*salt_coord_refresh[ \t]*=/ { coord = ($$0 ~ /true/) ? 1 : 0 } \
+		/^[ \t]*trr_enabled[ \t]*=/ { trr = ($$0 ~ /true/) ? 1 : 0 } \
+		/^[ \t]*para_enabled[ \t]*=/ { para = ($$0 ~ /true/) ? 1 : 0 } \
+		/^[ \t]*prac_abo_enabled[ \t]*=/ { pracabo = ($$0 ~ /true/) ? 1 : 0 } \
+		END { \
+			print "RH_SALT_ENABLED=" salt; \
+			print "RH_SALT_COORD_REFRESH=" coord; \
+			print "RH_TRR_ENABLED=" trr; \
+			print "RH_PARA_ENABLED=" para; \
+			print "RH_PRAC_ABO_ENABLED=" pracabo; \
+		}' $(DRAMSIM3_INI) > build/rh_env.txt
+
+verify: build/tmp_root/verify build/rh_env.txt
 	build/X86/gem5.opt $(gem5_args) gem5/configs/example/se.py $(se-args) \
+		--env=build/rh_env.txt \
 		--cmd=build/tmp_root/verify --options="$(TRACE)"
+
+# Like `verify`, but instead of running each microworkload's trace through
+# once, replays it (wrapping around) until TARGET_EVENTS lines have executed.
+# Override with e.g. `make verify-fixed TARGET_EVENTS=5000`.
+TARGET_EVENTS := 10000
+verify-fixed: build/tmp_root/verify build/rh_env.txt
+	build/X86/gem5.opt $(gem5_args) gem5/configs/example/se.py $(se-args) \
+		--env=build/rh_env.txt \
+		--cmd=build/tmp_root/verify \
+		--options="--target-events=$(TARGET_EVENTS) $(TRACE)"
 
 example: build/tmp_root/example
 	build/X86/gem5.opt $(gem5_args) gem5/configs/example/se.py $(se-args) --cmd=build/tmp_root/example
